@@ -82,6 +82,10 @@ func TestUnknownVaultRejectedByEveryTool(t *testing.T) {
 			_, _, err := s.deleteNote(ctx, nil, deleteNoteInput{Vault: "Nope", Path: "x"})
 			return err
 		}},
+		{"restore_note", func() error {
+			_, _, err := s.restoreNote(ctx, nil, restoreNoteInput{Vault: "Nope", Path: ".trash/x"})
+			return err
+		}},
 	}
 	for _, c := range checks {
 		if err := c.call(); err == nil || !strings.Contains(err.Error(), "unknown vault") {
@@ -182,6 +186,27 @@ func TestWriteTools(t *testing.T) {
 	if _, _, err := s.deleteNote(ctx, nil, deleteNoteInput{Vault: "Personal", Path: "archive/new.md"}); err == nil {
 		t.Error("deleteNote succeeded on missing note")
 	}
+	_, restored, err := s.restoreNote(ctx, nil, restoreNoteInput{Vault: "Personal", Path: ".trash/new.md"})
+	if err != nil || !restored.OK || restored.RestoredTo != "new.md" {
+		t.Fatalf("restoreNote: %+v %v", restored, err)
+	}
+	if _, _, err := s.restoreNote(ctx, nil, restoreNoteInput{Vault: "Personal", Path: "journal.md"}); err == nil {
+		t.Error("restoreNote accepted a path outside .trash")
+	}
+	_, restored, err = s.restoreNote(ctx, nil, restoreNoteInput{Vault: "Personal", Path: ".trash/new.md"})
+	if err == nil {
+		t.Errorf("restoreNote succeeded on missing trash note: %+v", restored)
+	}
+	if _, out, err := s.deleteNote(ctx, nil, deleteNoteInput{Vault: "Personal", Path: "new.md"}); err != nil || !out.OK {
+		t.Fatalf("re-deleteNote: %+v %v", out, err)
+	}
+	_, restored, err = s.restoreNote(ctx, nil, restoreNoteInput{Vault: "Personal", Path: ".trash/new.md", To: "archive/new.md"})
+	if err != nil || restored.RestoredTo != "archive/new.md" {
+		t.Fatalf("restoreNote with to: %+v %v", restored, err)
+	}
+	if _, out, err := s.deleteNote(ctx, nil, deleteNoteInput{Vault: "Personal", Path: "archive/new.md"}); err != nil || !out.OK {
+		t.Fatalf("re-deleteNote 2: %+v %v", out, err)
+	}
 	_, del, err = s.deleteNote(ctx, nil, deleteNoteInput{Vault: "Personal", Path: ".trash/new.md", Permanent: true})
 	if err != nil || del.TrashedTo != "" {
 		t.Fatalf("permanent deleteNote: %+v %v", del, err)
@@ -278,7 +303,8 @@ func TestEndToEndOverHTTP(t *testing.T) {
 	slices.Sort(names)
 	want := []string{
 		"append_note", "create_note", "delete_note", "edit_note",
-		"list_notes", "list_vaults", "move_note", "read_note", "search_notes",
+		"list_notes", "list_vaults", "move_note", "read_note",
+		"restore_note", "search_notes",
 	}
 	if !slices.Equal(names, want) {
 		t.Errorf("tools = %v, want %v", names, want)
