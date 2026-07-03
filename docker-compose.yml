@@ -3,7 +3,9 @@ services:
     build: .
     image: ghcr.io/andyjmorgan/obsidian-hosted-mcp:latest
     restart: unless-stopped
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     environment:
       # The container always listens on 8080; PORT in .env only selects the
       # published host port below.

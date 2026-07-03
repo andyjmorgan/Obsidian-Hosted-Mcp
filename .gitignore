@@ -1,6 +1,9 @@
 # Reference-only clones, never committed
 .reference/
 
+# Real credentials for docker compose — never commit
+.env
+
 coverage.out
 /obsidian-mcp
 bin/
