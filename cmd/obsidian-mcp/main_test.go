@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -131,5 +132,60 @@ func TestRunFailsWhenPortUnavailable(t *testing.T) {
 	env["PORT"] = strconv.Itoa(blocker.Addr().(*net.TCPAddr).Port)
 	if err := run(context.Background(), getenv(env), io.Discard, nil); err == nil {
 		t.Error("run succeeded on an occupied port")
+	}
+}
+
+func TestRunWithOIDC(t *testing.T) {
+	installFakeOb(t, `case "$1" in sync) exec sleep 60;; *) exit 0;; esac`)
+	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"issuer":%q,"jwks_uri":%q}`, "http://"+r.Host, "http://"+r.Host+"/jwks")
+	}))
+	defer idp.Close()
+
+	env := testEnv(t)
+	env["OAUTH_ISSUER"] = idp.URL
+	env["OAUTH_AUDIENCE"] = "obsidian-mcp"
+	env["MCP_PUBLIC_URL"] = "https://obsidian.example.com"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	addrCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- run(ctx, getenv(env), io.Discard, func(addr string) { addrCh <- addr })
+	}()
+	var addr string
+	select {
+	case addr = <-addrCh:
+	case err := <-errCh:
+		t.Fatalf("run exited early: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("server did not become ready")
+	}
+
+	res, err := http.Get(fmt.Sprintf("http://%s/.well-known/oauth-protected-resource", addr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(body), "https://obsidian.example.com") {
+		t.Errorf("metadata = %d %s", res.StatusCode, body)
+	}
+	cancel()
+	if err := <-errCh; err != nil {
+		t.Errorf("run returned %v after shutdown", err)
+	}
+}
+
+func TestRunOIDCConfigFailure(t *testing.T) {
+	installFakeOb(t, `case "$1" in sync) exec sleep 60;; *) exit 0;; esac`)
+	env := testEnv(t)
+	env["OAUTH_ISSUER"] = "http://127.0.0.1:1"
+	env["OAUTH_AUDIENCE"] = "obsidian-mcp"
+	env["MCP_PUBLIC_URL"] = "https://obsidian.example.com"
+	err := run(context.Background(), getenv(env), io.Discard, nil)
+	if err == nil || !strings.Contains(err.Error(), "configuring OIDC auth") {
+		t.Errorf("err = %v, want OIDC config failure", err)
 	}
 }

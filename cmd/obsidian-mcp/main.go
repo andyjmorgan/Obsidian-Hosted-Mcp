@@ -19,6 +19,7 @@ import (
 
 	"github.com/andyjmorgan/obsidian-hosted-mcp/internal/bootstrap"
 	"github.com/andyjmorgan/obsidian-hosted-mcp/internal/config"
+	"github.com/andyjmorgan/obsidian-hosted-mcp/internal/oidcauth"
 	"github.com/andyjmorgan/obsidian-hosted-mcp/internal/search"
 	"github.com/andyjmorgan/obsidian-hosted-mcp/internal/server"
 	"github.com/andyjmorgan/obsidian-hosted-mcp/internal/vault"
@@ -58,8 +59,23 @@ func run(ctx context.Context, getenv config.Getenv, logOut io.Writer, onReady fu
 	}
 	srv := server.New(vaults, search.New("rg", nil))
 
+	authCfg := server.AuthConfig{StaticToken: cfg.AuthToken}
+	if cfg.OAuth != nil {
+		logger.Info("delegating auth to OIDC provider", "issuer", cfg.OAuth.Issuer, "audience", cfg.OAuth.Audience)
+		verifier, err := oidcauth.New(ctx, cfg.OAuth, nil)
+		if err != nil {
+			return fmt.Errorf("configuring OIDC auth: %w", err)
+		}
+		authCfg.OIDC = &server.OIDCAuth{
+			Verify:    verifier.Verify,
+			Issuer:    cfg.OAuth.Issuer,
+			Scopes:    cfg.OAuth.Scopes,
+			PublicURL: cfg.PublicURL,
+		}
+	}
+
 	httpSrv := &http.Server{
-		Handler:           srv.Handler(cfg.AuthToken),
+		Handler:           srv.Handler(authCfg),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.Port))

@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/rand"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -184,5 +185,96 @@ func (failingReader) Read([]byte) (int, error) { return 0, errors.New("no entrop
 func TestLoadDeviceNameEntropyFailure(t *testing.T) {
 	if _, err := Load(env(validEnv()), failingReader{}); err == nil {
 		t.Error("Load succeeded with failing entropy source")
+	}
+}
+
+func TestLoadOAuth(t *testing.T) {
+	m := validEnv()
+	m["OAUTH_ISSUER"] = "https://idp.example.com/realms/lab"
+	m["OAUTH_AUDIENCE"] = "obsidian-mcp"
+	m["MCP_PUBLIC_URL"] = "https://obsidian.example.com"
+	cfg, err := Load(env(m), rand.Reader)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	o := cfg.OAuth
+	if o == nil {
+		t.Fatal("OAuth = nil, want configured")
+	}
+	if o.Issuer != "https://idp.example.com/realms/lab" || o.Audience != "obsidian-mcp" {
+		t.Errorf("OAuth = %+v", o)
+	}
+	if o.InternalIssuer != o.Issuer {
+		t.Errorf("InternalIssuer = %q, want issuer fallback", o.InternalIssuer)
+	}
+	if cfg.PublicURL != "https://obsidian.example.com" {
+		t.Errorf("PublicURL = %q", cfg.PublicURL)
+	}
+	if want := []string{"openid", "profile", "email"}; !slices.Equal(o.Scopes, want) {
+		t.Errorf("Scopes = %v, want default %v", o.Scopes, want)
+	}
+}
+
+func TestLoadOAuthExplicit(t *testing.T) {
+	m := validEnv()
+	delete(m, "MCP_AUTH_TOKEN") // OAuth alone is a valid auth setup
+	m["OAUTH_ISSUER"] = "https://idp.example.com/realms/lab"
+	m["OAUTH_AUDIENCE"] = "obsidian-mcp"
+	m["OAUTH_INTERNAL_ISSUER"] = "http://idp.cluster.local/realms/lab"
+	m["OAUTH_SCOPES"] = "openid, obsidian-audience"
+	m["MCP_PUBLIC_URL"] = "https://obsidian.example.com/"
+	cfg, err := Load(env(m), rand.Reader)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AuthToken != "" {
+		t.Errorf("AuthToken = %q, want empty", cfg.AuthToken)
+	}
+	if cfg.OAuth.InternalIssuer != "http://idp.cluster.local/realms/lab" {
+		t.Errorf("InternalIssuer = %q", cfg.OAuth.InternalIssuer)
+	}
+	if want := []string{"openid", "obsidian-audience"}; !slices.Equal(cfg.OAuth.Scopes, want) {
+		t.Errorf("Scopes = %v, want %v", cfg.OAuth.Scopes, want)
+	}
+	if cfg.PublicURL != "https://obsidian.example.com" {
+		t.Errorf("PublicURL = %q, want trailing slash trimmed", cfg.PublicURL)
+	}
+}
+
+func TestLoadOAuthValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(map[string]string)
+		wantErr string
+	}{
+		{"no auth at all", func(m map[string]string) {
+			delete(m, "MCP_AUTH_TOKEN")
+		}, "MCP_AUTH_TOKEN or OAUTH_ISSUER"},
+		{"issuer without audience", func(m map[string]string) {
+			m["OAUTH_ISSUER"] = "https://idp.example.com"
+			m["MCP_PUBLIC_URL"] = "https://obsidian.example.com"
+		}, "OAUTH_AUDIENCE"},
+		{"issuer without public url", func(m map[string]string) {
+			m["OAUTH_ISSUER"] = "https://idp.example.com"
+			m["OAUTH_AUDIENCE"] = "obsidian-mcp"
+		}, "MCP_PUBLIC_URL"},
+		{"non-http issuer", func(m map[string]string) {
+			m["OAUTH_ISSUER"] = "idp.example.com"
+			m["OAUTH_AUDIENCE"] = "obsidian-mcp"
+			m["MCP_PUBLIC_URL"] = "https://obsidian.example.com"
+		}, "OAUTH_ISSUER"},
+		{"audience without issuer", func(m map[string]string) {
+			m["OAUTH_AUDIENCE"] = "obsidian-mcp"
+		}, "OAUTH_ISSUER"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := validEnv()
+			c.mutate(m)
+			_, err := Load(env(m), rand.Reader)
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Errorf("err = %v, want mention of %s", err, c.wantErr)
+			}
+		})
 	}
 }
