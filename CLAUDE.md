@@ -69,6 +69,18 @@ bare `alpine` runtime with apk `nodejs` (same Node 22 ABI), `ripgrep`,
 `tini`, running as a non-root user. Keep the runtime stage minimal; the
 image-size target is "as small as possible" (~142MB today).
 
+## Methodology
+
+TDD is crucial here — treat it as a regular checkpoint, file by file and
+feature by feature, not something to backfill at the end.
+
+- **Bugs**: reproduce with a failing test first, then fix, then confirm the
+  test passes. No bug fix lands without the test that would have caught it.
+- **New features / builds**: build the piece, test it, and only then
+  proceed to the next piece. After each file or feature, stop and run the
+  full check (`gofmt`, `go vet`, `go test ./...`) before moving on — do not
+  batch several features and test at the end.
+
 ## Quality gates
 
 CI (`.github/workflows/ci.yml`) enforces, in order:
