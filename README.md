@@ -9,6 +9,12 @@
   <a href="https://obsidian.md">Obsidian</a> vaults — from anywhere.
 </p>
 
+<p align="center">
+  <a href="https://github.com/andyjmorgan/Obsidian-Hosted-Mcp/actions/workflows/ci.yml"><img src="https://github.com/andyjmorgan/Obsidian-Hosted-Mcp/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/andyjmorgan/Obsidian-Hosted-Mcp/pkgs/container/obsidian-hosted-mcp"><img src="https://img.shields.io/badge/ghcr.io-obsidian--hosted--mcp-blue?logo=docker" alt="Container image"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
+</p>
+
 ## Why this exists
 
 Your Obsidian vault is where your notes, projects, and ideas live — but AI

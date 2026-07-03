@@ -19,7 +19,7 @@ import (
 )
 
 // Version is the server version reported to MCP clients.
-const Version = "0.1.0"
+const Version = "0.4.0"
 
 // Server wires vaults and search into an MCP tool set.
 type Server struct {
