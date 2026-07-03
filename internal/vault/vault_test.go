@@ -453,3 +453,89 @@ func TestDeleteSoftTrashBlockedByFile(t *testing.T) {
 		t.Error("Delete succeeded with .trash blocked by a file")
 	}
 }
+
+func TestListTrashExplicitly(t *testing.T) {
+	v := newTestVault(t)
+	mustWrite(t, v, ".trash/old.md", "gone")
+	mustWrite(t, v, ".trash/sub/nested.md", "deep")
+	entries, err := v.List(TrashDir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Entry{
+		{Path: ".trash/old.md", Size: 4},
+		{Path: ".trash/sub", IsDir: true},
+		{Path: ".trash/sub/nested.md", Size: 4},
+	}
+	assertEntries(t, entries, want)
+}
+
+func TestListEmptyDirMarshalsAsArray(t *testing.T) {
+	v := newTestVault(t)
+	entries, err := v.List("", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries == nil {
+		t.Fatal("List returned a nil slice; it must marshal as [], not null")
+	}
+}
+
+func TestRestoreDefaultDestination(t *testing.T) {
+	v := newTestVault(t)
+	mustWrite(t, v, "dir/note.md", "content")
+	if _, err := v.Delete("dir/note.md", false); err != nil {
+		t.Fatal(err)
+	}
+	restoredTo, err := v.Restore(".trash/note.md", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restoredTo != "note.md" {
+		t.Errorf("restoredTo = %q, want %q", restoredTo, "note.md")
+	}
+	if got := mustReadFile(t, v, "note.md"); got != "content" {
+		t.Errorf("restored content = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(v.Root(), ".trash/note.md")); !os.IsNotExist(err) {
+		t.Error("note still present in .trash after restore")
+	}
+}
+
+func TestRestoreExplicitDestination(t *testing.T) {
+	v := newTestVault(t)
+	mustWrite(t, v, ".trash/note.md", "content")
+	restoredTo, err := v.Restore(".trash/note.md", "dir/back.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restoredTo != "dir/back.md" {
+		t.Errorf("restoredTo = %q", restoredTo)
+	}
+	if got := mustReadFile(t, v, "dir/back.md"); got != "content" {
+		t.Errorf("restored content = %q", got)
+	}
+}
+
+func TestRestoreErrors(t *testing.T) {
+	v := newTestVault(t)
+	mustWrite(t, v, "live.md", "x")
+	mustWrite(t, v, ".trash/live.md", "y")
+	mustWrite(t, v, ".trash/ghost-dest.md", "z")
+
+	if _, err := v.Restore("live.md", ""); err == nil {
+		t.Error("Restore accepted a path outside .trash")
+	}
+	if _, err := v.Restore(".trash/missing.md", ""); err == nil {
+		t.Error("Restore accepted a missing trash note")
+	}
+	if _, err := v.Restore(".trash/live.md", ""); err == nil {
+		t.Error("Restore clobbered an existing destination")
+	}
+	if _, err := v.Restore(".trash/ghost-dest.md", "../escape.md"); err == nil {
+		t.Error("Restore accepted an escaping destination")
+	}
+	if _, err := v.Restore(TrashDir, ""); err == nil {
+		t.Error("Restore accepted .trash itself")
+	}
+}

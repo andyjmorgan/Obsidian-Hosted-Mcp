@@ -82,8 +82,9 @@ func (v *Vault) resolve(rel string) (string, error) {
 }
 
 // List returns entries under dir (vault root when dir is empty), skipping
-// hidden files and directories such as .obsidian and .trash. When recursive
-// is true it descends into subdirectories.
+// hidden files and directories such as .obsidian and .trash. Passing a
+// hidden directory such as .trash as dir lists inside it explicitly. When
+// recursive is true it descends into subdirectories.
 func (v *Vault) List(dir string, recursive bool) ([]Entry, error) {
 	base := v.root
 	if dir != "" {
@@ -93,7 +94,8 @@ func (v *Vault) List(dir string, recursive bool) ([]Entry, error) {
 		}
 		base = abs
 	}
-	var entries []Entry
+	// entries starts non-nil so an empty listing marshals as [], not null.
+	entries := []Entry{}
 	if recursive {
 		err := filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -283,6 +285,24 @@ func (v *Vault) Move(from, to string) error {
 		return fmt.Errorf("moving %q to %q: %w", from, to, err)
 	}
 	return nil
+}
+
+// Restore moves a note out of the vault's .trash back into the vault. When
+// to is empty the note is restored to the path it had inside .trash (its
+// original directory is not recorded by the trash convention). It fails if
+// the destination already exists.
+func (v *Vault) Restore(rel, to string) (string, error) {
+	slashRel := filepath.ToSlash(rel)
+	if !strings.HasPrefix(slashRel, TrashDir+"/") {
+		return "", fmt.Errorf("restoring %q: only notes inside %s/ can be restored", rel, TrashDir)
+	}
+	if to == "" {
+		to = strings.TrimPrefix(slashRel, TrashDir+"/")
+	}
+	if err := v.Move(rel, to); err != nil {
+		return "", err
+	}
+	return to, nil
 }
 
 // Delete removes the note at path. By default it is moved into the vault's

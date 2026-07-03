@@ -47,8 +47,9 @@ func (s *Server) MCPServer() *mcp.Server {
 	}, s.listVaults)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "list_notes",
-		Description: "List notes and directories in a vault. Hidden folders such as .obsidian and .trash are excluded.",
+		Name: "list_notes",
+		Description: "List notes and directories in a vault. Hidden folders such as .obsidian and .trash are excluded, " +
+			"but passing dir \".trash\" lists deleted notes explicitly.",
 	}, s.listNotes)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -86,9 +87,15 @@ func (s *Server) MCPServer() *mcp.Server {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "delete_note",
-		Description: "Delete a note. By default it is moved to the vault's .trash folder (recoverable from any synced device); " +
+		Description: "Delete a note. By default it is moved to the vault's .trash folder (recoverable with restore_note); " +
 			"set permanent to remove it outright.",
 	}, s.deleteNote)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "restore_note",
+		Description: "Restore (undelete) a note from the vault's .trash folder. Restores to the note's path inside .trash " +
+			"unless to is set; use list_notes with dir \".trash\" to see what can be restored.",
+	}, s.restoreNote)
 
 	return srv
 }
@@ -295,6 +302,30 @@ type deleteNoteOutput struct {
 	// TrashedTo is the vault-relative path the note was moved to inside
 	// .trash; empty for permanent deletions.
 	TrashedTo string `json:"trashed_to,omitempty" jsonschema:"where the note was moved inside .trash; empty when deleted permanently"`
+}
+
+type restoreNoteInput struct {
+	Vault string `json:"vault" jsonschema:"name of the vault"`
+	Path  string `json:"path" jsonschema:"vault-relative path of the note inside .trash"`
+	To    string `json:"to,omitempty" jsonschema:"destination vault-relative path; defaults to the note's path inside .trash"`
+}
+
+type restoreNoteOutput struct {
+	OK bool `json:"ok"`
+	// RestoredTo is the vault-relative path the note was restored to.
+	RestoredTo string `json:"restored_to" jsonschema:"vault-relative path the note was restored to"`
+}
+
+func (s *Server) restoreNote(_ context.Context, _ *mcp.CallToolRequest, in restoreNoteInput) (*mcp.CallToolResult, restoreNoteOutput, error) {
+	v, err := s.vault(in.Vault)
+	if err != nil {
+		return nil, restoreNoteOutput{}, err
+	}
+	restoredTo, err := v.Restore(in.Path, in.To)
+	if err != nil {
+		return nil, restoreNoteOutput{}, err
+	}
+	return nil, restoreNoteOutput{OK: true, RestoredTo: restoredTo}, nil
 }
 
 func (s *Server) deleteNote(_ context.Context, _ *mcp.CallToolRequest, in deleteNoteInput) (*mcp.CallToolResult, deleteNoteOutput, error) {
