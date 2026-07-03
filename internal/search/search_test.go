@@ -1,7 +1,9 @@
 package search
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -87,6 +89,13 @@ func TestSearchNoMatches(t *testing.T) {
 	}
 	if res.TotalMatches != 0 || len(res.Files) != 0 || res.Truncated {
 		t.Fatalf("got %+v", res)
+	}
+	out, err := json.Marshal(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(out, []byte(`"files":[]`)) {
+		t.Fatalf("zero-match result must marshal files as [], not null: %s", out)
 	}
 }
 

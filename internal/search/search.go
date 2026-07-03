@@ -155,7 +155,9 @@ type event struct {
 }
 
 func parseJSONEvents(out []byte, maxResults int) (*Result, error) {
-	res := &Result{}
+	// Files starts non-nil so a zero-match result marshals as "files": []
+	// rather than "files": null.
+	res := &Result{Files: []FileMatches{}}
 	var current *FileMatches
 	scanner := bufio.NewScanner(bytes.NewReader(out))
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
