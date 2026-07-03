@@ -1,0 +1,25 @@
+services:
+  obsidian-mcp:
+    build: .
+    image: ghcr.io/andyjmorgan/obsidian-hosted-mcp:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # The container always listens on 8080; PORT in .env only selects the
+      # published host port below.
+      PORT: 8080
+    ports:
+      - "${PORT:-8080}:8080"
+    volumes:
+      # Persist synced vaults and the ob client's credential store so
+      # restarts don't re-download every vault or re-register a device.
+      - vaults:/home/obsidian
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  vaults:
