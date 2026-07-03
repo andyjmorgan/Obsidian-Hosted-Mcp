@@ -2,6 +2,11 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -218,7 +223,7 @@ func TestWriteTools(t *testing.T) {
 
 func TestHealthz(t *testing.T) {
 	s := newTestServer(t)
-	ts := httptest.NewServer(s.Handler("secret"))
+	ts := httptest.NewServer(s.Handler(AuthConfig{StaticToken: "secret"}))
 	defer ts.Close()
 
 	res, err := http.Get(ts.URL + "/healthz")
@@ -233,7 +238,7 @@ func TestHealthz(t *testing.T) {
 
 func TestBearerAuth(t *testing.T) {
 	s := newTestServer(t)
-	ts := httptest.NewServer(s.Handler("secret"))
+	ts := httptest.NewServer(s.Handler(AuthConfig{StaticToken: "secret"}))
 	defer ts.Close()
 
 	for _, tt := range []struct {
@@ -278,7 +283,7 @@ func (a authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // over the streamable HTTP transport, including auth.
 func TestEndToEndOverHTTP(t *testing.T) {
 	s := newTestServer(t)
-	ts := httptest.NewServer(s.Handler("secret"))
+	ts := httptest.NewServer(s.Handler(AuthConfig{StaticToken: "secret"}))
 	defer ts.Close()
 
 	ctx := context.Background()
@@ -341,7 +346,7 @@ func TestEndToEndOverHTTP(t *testing.T) {
 // establish a session.
 func TestEndToEndRejectsBadToken(t *testing.T) {
 	s := newTestServer(t)
-	ts := httptest.NewServer(s.Handler("secret"))
+	ts := httptest.NewServer(s.Handler(AuthConfig{StaticToken: "secret"}))
 	defer ts.Close()
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.0.1"}, nil)
@@ -353,5 +358,137 @@ func TestEndToEndRejectsBadToken(t *testing.T) {
 	if err == nil {
 		session.Close()
 		t.Fatal("client connected with a bad token")
+	}
+}
+
+func oidcTestAuth(verify func(ctx context.Context, token string) (*auth.TokenInfo, error)) AuthConfig {
+	return AuthConfig{
+		OIDC: &OIDCAuth{
+			Verify:    verify,
+			Issuer:    "https://idp.example.com/realms/lab",
+			Scopes:    []string{"openid", "profile"},
+			PublicURL: "https://obsidian.example.com",
+		},
+	}
+}
+
+func fakeVerify(t *testing.T) func(ctx context.Context, token string) (*auth.TokenInfo, error) {
+	t.Helper()
+	return func(_ context.Context, token string) (*auth.TokenInfo, error) {
+		if token == "good-jwt" {
+			return &auth.TokenInfo{UserID: "user-1", Expiration: time.Now().Add(time.Hour)}, nil
+		}
+		return nil, fmt.Errorf("%w: not good-jwt", auth.ErrInvalidToken)
+	}
+}
+
+func TestProtectedResourceMetadata(t *testing.T) {
+	s := newTestServer(t)
+	ts := httptest.NewServer(s.Handler(oidcTestAuth(fakeVerify(t))))
+	defer ts.Close()
+
+	res, err := http.Get(ts.URL + "/.well-known/oauth-protected-resource")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("metadata status = %d", res.StatusCode)
+	}
+	var meta struct {
+		Resource             string   `json:"resource"`
+		AuthorizationServers []string `json:"authorization_servers"`
+		ScopesSupported      []string `json:"scopes_supported"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta.Resource != "https://obsidian.example.com" {
+		t.Errorf("resource = %q", meta.Resource)
+	}
+	if len(meta.AuthorizationServers) != 1 || meta.AuthorizationServers[0] != "https://idp.example.com/realms/lab" {
+		t.Errorf("authorization_servers = %v", meta.AuthorizationServers)
+	}
+	if fmt.Sprint(meta.ScopesSupported) != fmt.Sprint([]string{"openid", "profile"}) {
+		t.Errorf("scopes_supported = %v", meta.ScopesSupported)
+	}
+}
+
+func TestNoMetadataWithoutOIDC(t *testing.T) {
+	s := newTestServer(t)
+	ts := httptest.NewServer(s.Handler(AuthConfig{StaticToken: "secret"}))
+	defer ts.Close()
+	res, err := http.Get(ts.URL + "/.well-known/oauth-protected-resource")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	// Without OIDC there is no OAuth flow to advertise; the path falls
+	// through to the bearer-protected MCP mux and is rejected.
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Errorf("metadata status = %d, want 401", res.StatusCode)
+	}
+}
+
+func TestOIDCBearer(t *testing.T) {
+	s := newTestServer(t)
+	cfg := oidcTestAuth(fakeVerify(t))
+	cfg.StaticToken = "api-key" // both modes enabled side by side
+	ts := httptest.NewServer(s.Handler(cfg))
+	defer ts.Close()
+
+	post := func(header string) *http.Response {
+		req, err := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if header != "" {
+			req.Header.Set("Authorization", header)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { res.Body.Close() })
+		return res
+	}
+
+	if res := post("Bearer good-jwt"); res.StatusCode == http.StatusUnauthorized {
+		t.Error("OIDC token rejected")
+	}
+	if res := post("Bearer api-key"); res.StatusCode == http.StatusUnauthorized {
+		t.Error("static API key rejected when OIDC is enabled")
+	}
+	res := post("Bearer bad-jwt")
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Errorf("bad token status = %d, want 401", res.StatusCode)
+	}
+	if got := res.Header.Get("WWW-Authenticate"); !strings.Contains(got, "resource_metadata=") ||
+		!strings.Contains(got, "https://obsidian.example.com/.well-known/oauth-protected-resource") {
+		t.Errorf("WWW-Authenticate = %q, want resource_metadata challenge", got)
+	}
+	if res := post(""); res.StatusCode != http.StatusUnauthorized {
+		t.Errorf("missing header status = %d, want 401", res.StatusCode)
+	}
+}
+
+func TestOIDCOnlyRejectsStaticToken(t *testing.T) {
+	s := newTestServer(t)
+	ts := httptest.NewServer(s.Handler(oidcTestAuth(fakeVerify(t))))
+	defer ts.Close()
+	req, err := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer some-api-key")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 (no static token configured)", res.StatusCode)
 	}
 }

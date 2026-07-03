@@ -35,7 +35,12 @@ unauthenticated for load balancers.
 | `OBSIDIAN_PASSWORD` | yes | Obsidian account password. |
 | `OBSIDIAN_VAULTS` | yes | Comma-separated remote vault names, each optionally `Name:encryption-password`. |
 | `OBSIDIAN_VAULT_PASSWORD` | no | End-to-end encryption password applied to vaults that don't carry their own. |
-| `MCP_AUTH_TOKEN` | yes | Static bearer token clients must present. Real MCP auth is out of scope for the MVP. |
+| `MCP_AUTH_TOKEN` | yes* | Static bearer token (API key) clients may present. Optional when `OAUTH_ISSUER` is set; at least one of the two is required. |
+| `OAUTH_ISSUER` | no | OpenID Connect issuer URL. Setting it delegates auth to that provider: bearer JWTs it issues are accepted, and RFC 9728 protected-resource metadata is served at `/.well-known/oauth-protected-resource` so MCP clients can discover the OAuth flow. Provider-agnostic (Keycloak, Auth0, Entra ID, ...). |
+| `OAUTH_AUDIENCE` | with `OAUTH_ISSUER` | Audience tokens must carry in `aud` (or `azp`, the authorized-party fallback used by e.g. Keycloak client tokens). |
+| `MCP_PUBLIC_URL` | with `OAUTH_ISSUER` | This server's canonical public URL, used as the protected-resource identifier. |
+| `OAUTH_INTERNAL_ISSUER` | no | Alternative base URL for fetching discovery/JWKS (e.g. cluster-internal). The discovery document must still report `OAUTH_ISSUER` as its issuer. |
+| `OAUTH_SCOPES` | no | Comma-separated scopes advertised as `scopes_supported`. Default `openid,profile,email`. |
 | `OBSIDIAN_DEVICE_NAME` | no | Device name shown in sync version history. Defaults to `ObsidianMCP-` plus 8 random hex characters; set it explicitly so restarts reuse one device identity. |
 | `VAULTS_DIR` | no | Where vaults are synced locally. Defaults to `~/vaults`. |
 | `PORT` | no | HTTP listen port, default `8080`. |
@@ -78,7 +83,8 @@ tags from `v*` releases.
 
 - Run behind TLS (a reverse proxy or your platform's ingress); the token
   travels in a header.
-- The bearer token is a shared secret, not user auth. OAuth-based MCP auth
-  is planned but out of scope for the MVP.
+- The static bearer token is a shared secret, not user auth. For user
+  identity, set `OAUTH_ISSUER` to delegate authentication to any OpenID
+  Connect provider; both modes can run side by side.
 - Credentials are passed to the `ob` CLI as arguments inside the container
   and are redacted from this server's logs.

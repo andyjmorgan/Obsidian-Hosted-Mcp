@@ -29,6 +29,23 @@ type Vault struct {
 	Password string
 }
 
+// OAuth configures delegation of MCP authentication to a third-party
+// OpenID Connect identity provider (Keycloak, Auth0, Entra ID, ...).
+type OAuth struct {
+	// Issuer is the provider's public issuer URL; tokens must carry it in
+	// their iss claim.
+	Issuer string
+	// InternalIssuer is where discovery metadata and JWKS are fetched from
+	// (e.g. a cluster-internal service URL). Defaults to Issuer.
+	InternalIssuer string
+	// Audience must appear in the token's aud claim (or azp, the OAuth
+	// authorized-party fallback some providers use for client tokens).
+	Audience string
+	// Scopes are advertised to MCP clients in the protected-resource
+	// metadata as scopes_supported.
+	Scopes []string
+}
+
 // Config holds the full server configuration.
 type Config struct {
 	// Email and Password authenticate the Obsidian account (ob login).
@@ -40,8 +57,15 @@ type Config struct {
 	Vaults []Vault
 	// VaultsDir is the local directory under which each vault is synced.
 	VaultsDir string
-	// AuthToken is the static bearer token required on MCP requests.
+	// AuthToken is the static bearer token (API key) accepted on MCP
+	// requests. Optional when OAuth is configured.
 	AuthToken string
+	// OAuth, when non-nil, additionally accepts bearer tokens issued by an
+	// OpenID Connect provider.
+	OAuth *OAuth
+	// PublicURL is this server's canonical external URL, used as the
+	// protected-resource identifier in OAuth metadata. Required with OAuth.
+	PublicURL string
 	// Port is the HTTP listen port.
 	Port int
 }
@@ -63,8 +87,14 @@ func Load(getenv Getenv, randSource io.Reader) (*Config, error) {
 	if cfg.Password == "" {
 		return nil, errors.New("OBSIDIAN_PASSWORD must be set")
 	}
-	if cfg.AuthToken == "" {
-		return nil, errors.New("MCP_AUTH_TOKEN must be set: the MCP endpoint is bearer-token protected")
+	oauth, publicURL, err := parseOAuth(getenv)
+	if err != nil {
+		return nil, err
+	}
+	cfg.OAuth = oauth
+	cfg.PublicURL = publicURL
+	if cfg.AuthToken == "" && cfg.OAuth == nil {
+		return nil, errors.New("MCP_AUTH_TOKEN or OAUTH_ISSUER must be set: the MCP endpoint is bearer-token protected")
 	}
 
 	vaults, err := parseVaults(getenv("OBSIDIAN_VAULTS"), getenv("OBSIDIAN_VAULT_PASSWORD"))
@@ -101,6 +131,48 @@ func Load(getenv Getenv, randSource io.Reader) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// parseOAuth reads the OAUTH_* / MCP_PUBLIC_URL variables. OAuth is enabled
+// by setting OAUTH_ISSUER; OAUTH_AUDIENCE and MCP_PUBLIC_URL are then
+// required, OAUTH_INTERNAL_ISSUER and OAUTH_SCOPES optional.
+func parseOAuth(getenv Getenv) (*OAuth, string, error) {
+	issuer := strings.TrimSuffix(strings.TrimSpace(getenv("OAUTH_ISSUER")), "/")
+	if issuer == "" {
+		for _, key := range []string{"OAUTH_AUDIENCE", "OAUTH_INTERNAL_ISSUER", "OAUTH_SCOPES"} {
+			if getenv(key) != "" {
+				return nil, "", fmt.Errorf("%s is set but OAUTH_ISSUER is not: set OAUTH_ISSUER to enable OAuth", key)
+			}
+		}
+		return nil, "", nil
+	}
+	if !strings.HasPrefix(issuer, "https://") && !strings.HasPrefix(issuer, "http://") {
+		return nil, "", fmt.Errorf("OAUTH_ISSUER must be an http(s) URL, got %q", issuer)
+	}
+	o := &OAuth{
+		Issuer:         issuer,
+		InternalIssuer: strings.TrimSuffix(strings.TrimSpace(getenv("OAUTH_INTERNAL_ISSUER")), "/"),
+		Audience:       strings.TrimSpace(getenv("OAUTH_AUDIENCE")),
+	}
+	if o.InternalIssuer == "" {
+		o.InternalIssuer = o.Issuer
+	}
+	if o.Audience == "" {
+		return nil, "", errors.New("OAUTH_AUDIENCE must be set when OAUTH_ISSUER is: tokens are validated against it")
+	}
+	for _, s := range strings.Split(getenv("OAUTH_SCOPES"), ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			o.Scopes = append(o.Scopes, s)
+		}
+	}
+	if len(o.Scopes) == 0 {
+		o.Scopes = []string{"openid", "profile", "email"}
+	}
+	publicURL := strings.TrimSuffix(strings.TrimSpace(getenv("MCP_PUBLIC_URL")), "/")
+	if publicURL == "" {
+		return nil, "", errors.New("MCP_PUBLIC_URL must be set when OAUTH_ISSUER is: it is the protected-resource identifier advertised to MCP clients")
+	}
+	return o, publicURL, nil
 }
 
 // parseVaults parses the OBSIDIAN_VAULTS list. Each comma-separated entry is
