@@ -1,0 +1,7 @@
+# Reference-only clones, never committed
+.reference/
+
+coverage.out
+/obsidian-mcp
+bin/
+.local-ca.crt
