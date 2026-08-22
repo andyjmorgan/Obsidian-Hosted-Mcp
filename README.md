@@ -65,8 +65,10 @@ docker compose up -d
 ```
 
 Watch the logs: the container logs in, connects each vault, starts
-continuous sync, and then serves MCP on port 8080. `GET /healthz` is
-unauthenticated for load balancers and health checks.
+continuous sync, and then serves MCP on port 8080. Health endpoints are
+unauthenticated: `GET /livez` checks the HTTP process, while `GET /readyz`
+requires a fresh `Fully synced` heartbeat from every vault. `/healthz` is a
+backwards-compatible alias for `/readyz`.
 
 ## Connect your AI assistant
 
@@ -114,6 +116,10 @@ authorization flow itself.
 Startup is fail-fast: if login, any vault's `sync-setup`, or OAuth
 discovery fails, the container exits non-zero so your orchestrator surfaces
 the misconfiguration instead of serving a half-configured vault set.
+During continuous operation, a vault becomes unready after two minutes
+without a successful sync heartbeat. If its sync child stays silent for five
+minutes, the built-in supervisor terminates and restarts that child with
+exponential backoff; the MCP process and other vault syncs remain running.
 
 ## Configuration
 

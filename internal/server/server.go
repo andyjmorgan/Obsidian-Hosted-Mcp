@@ -19,21 +19,23 @@ import (
 )
 
 // Version is the server version reported to MCP clients.
-const Version = "0.4.0"
+const Version = "0.5.0"
 
 // Server wires vaults and search into an MCP tool set.
 type Server struct {
 	vaults   map[string]*vault.Vault
 	searcher *search.Searcher
+	// syncReady reports whether every vault has a fresh sync heartbeat.
+	syncReady func() bool
 }
 
 // New returns a Server over the given vaults.
-func New(vaults []*vault.Vault, searcher *search.Searcher) *Server {
+func New(vaults []*vault.Vault, searcher *search.Searcher, syncReady func() bool) *Server {
 	m := make(map[string]*vault.Vault, len(vaults))
 	for _, v := range vaults {
 		m[v.Name()] = v
 	}
-	return &Server{vaults: m, searcher: searcher}
+	return &Server{vaults: m, searcher: searcher, syncReady: syncReady}
 }
 
 // MCPServer builds the MCP server with all tools registered.
@@ -128,7 +130,8 @@ type AuthConfig struct {
 	OIDC        *OIDCAuth
 }
 
-// Handler returns the HTTP handler: a health endpoint at /healthz, RFC 9728
+// Handler returns the HTTP handler: process liveness at /livez, sync-aware
+// readiness at /readyz and its backwards-compatible /healthz alias, RFC 9728
 // protected-resource metadata when OIDC is enabled, and the bearer-protected
 // MCP endpoint everywhere else.
 func (s *Server) Handler(authCfg AuthConfig) http.Handler {
@@ -136,10 +139,20 @@ func (s *Server) Handler(authCfg AuthConfig) http.Handler {
 		return s.MCPServer()
 	}, nil)
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/livez", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
 	})
+	ready := func(w http.ResponseWriter, _ *http.Request) {
+		if s.syncReady == nil || !s.syncReady() {
+			http.Error(w, "sync not ready", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "ok")
+	}
+	mux.HandleFunc("/readyz", ready)
+	mux.HandleFunc("/healthz", ready)
 	opts := &auth.RequireBearerTokenOptions{}
 	if authCfg.OIDC != nil {
 		opts.ResourceMetadataURL = authCfg.OIDC.PublicURL + metadataPath

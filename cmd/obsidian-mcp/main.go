@@ -57,7 +57,7 @@ func run(ctx context.Context, getenv config.Getenv, logOut io.Writer, onReady fu
 	for _, v := range cfg.Vaults {
 		vaults = append(vaults, vault.New(v.Name, b.VaultPath(v)))
 	}
-	srv := server.New(vaults, search.New("rg", nil))
+	srv := server.New(vaults, search.New("rg", nil), b.SyncReady)
 
 	authCfg := server.AuthConfig{StaticToken: cfg.AuthToken}
 	if cfg.OAuth != nil {

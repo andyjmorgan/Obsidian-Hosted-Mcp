@@ -29,7 +29,7 @@ func newTestServer(t *testing.T) *Server {
 	write(t, work, "note.md", "# Note\n\nhello world\n")
 	write(t, work, "projects/plan.md", "TODO: ship the MCP server\n")
 	write(t, personal, "journal.md", "quiet day\n")
-	return New([]*vault.Vault{work, personal}, search.New("rg", nil))
+	return New([]*vault.Vault{work, personal}, search.New("rg", nil), func() bool { return true })
 }
 
 func write(t *testing.T, v *vault.Vault, rel, content string) {
@@ -221,18 +221,38 @@ func TestWriteTools(t *testing.T) {
 	}
 }
 
-func TestHealthz(t *testing.T) {
+func TestHealthEndpoints(t *testing.T) {
 	s := newTestServer(t)
+	ready := true
+	s.syncReady = func() bool { return ready }
 	ts := httptest.NewServer(s.Handler(AuthConfig{StaticToken: "secret"}))
 	defer ts.Close()
 
-	res, err := http.Get(ts.URL + "/healthz")
-	if err != nil {
-		t.Fatal(err)
+	for _, path := range []string{"/livez", "/readyz", "/healthz"} {
+		res, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Errorf("%s status = %d, want 200", path, res.StatusCode)
+		}
 	}
-	res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		t.Errorf("healthz status = %d", res.StatusCode)
+
+	ready = false
+	for path, want := range map[string]int{
+		"/livez":   http.StatusOK,
+		"/readyz":  http.StatusServiceUnavailable,
+		"/healthz": http.StatusServiceUnavailable,
+	} {
+		res, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != want {
+			t.Errorf("%s status = %d, want %d", path, res.StatusCode, want)
+		}
 	}
 }
 

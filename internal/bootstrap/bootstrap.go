@@ -38,6 +38,14 @@ type Bootstrapper struct {
 	// stableRun is how long a sync process must live before its next
 	// failure resets the restart backoff, shortened in tests.
 	stableRun time.Duration
+	// now and watchdog timings are injectable for deterministic health tests.
+	now           func() time.Time
+	watchdogAfter time.Duration
+	watchdogPoll  time.Duration
+
+	healthMu   sync.RWMutex
+	syncStates map[string]*syncState
+	outputMu   sync.Mutex
 }
 
 // New returns a Bootstrapper for cfg that executes "ob" from PATH.
@@ -49,6 +57,11 @@ func New(cfg *config.Config, log *slog.Logger) *Bootstrapper {
 		syncOutput: os.Stdout,
 		sleep:      sleepCtx,
 		stableRun:  stableRunThreshold,
+		now:        time.Now,
+
+		watchdogAfter: defaultWatchdogAfter,
+		watchdogPoll:  defaultWatchdogPoll,
+		syncStates:    make(map[string]*syncState, len(cfg.Vaults)),
 	}
 }
 
@@ -120,10 +133,7 @@ func (b *Bootstrapper) superviseVault(ctx context.Context, v config.Vault) {
 	for ctx.Err() == nil {
 		b.log.Info("starting continuous sync", "vault", v.Name)
 		start := time.Now()
-		cmd := exec.CommandContext(ctx, b.binary, "sync", "--continuous", "--path", b.VaultPath(v))
-		cmd.Stdout = b.syncOutput
-		cmd.Stderr = b.syncOutput
-		err := cmd.Run()
+		err := b.runContinuousSync(ctx, v)
 		if ctx.Err() != nil {
 			return
 		}
@@ -134,6 +144,46 @@ func (b *Bootstrapper) superviseVault(ctx context.Context, v config.Vault) {
 			"vault", v.Name, "error", err, "backoff", backoff.String())
 		b.sleep(ctx, backoff)
 		backoff = min(backoff*2, maxBackoff)
+	}
+}
+
+func (b *Bootstrapper) runContinuousSync(ctx context.Context, v config.Vault) error {
+	childCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	cmd := exec.CommandContext(childCtx, b.binary, "sync", "--continuous", "--path", b.VaultPath(v))
+	output := b.observedSyncOutput(v.Name)
+	cmd.Stdout = output
+	cmd.Stderr = output
+	b.syncStarted(v.Name)
+	defer b.syncStopped(v.Name)
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Run() }()
+	ticker := time.NewTicker(b.watchdogPoll)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case err := <-done:
+			return err
+		case <-ticker.C:
+			if !b.syncStale(v.Name, b.watchdogAfter) {
+				continue
+			}
+			b.log.Warn("sync heartbeat stale, restarting child", "vault", v.Name,
+				"max_age", b.watchdogAfter.String())
+			cancel()
+			err := <-done
+			if err == nil {
+				return fmt.Errorf("sync heartbeat stale for %s", b.watchdogAfter)
+			}
+			return fmt.Errorf("sync heartbeat stale for %s: %w", b.watchdogAfter, err)
+		case <-ctx.Done():
+			cancel()
+			<-done
+			return ctx.Err()
+		}
 	}
 }
 

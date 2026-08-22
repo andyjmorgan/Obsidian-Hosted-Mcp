@@ -17,11 +17,11 @@ services:
       # restarts don't re-download every vault or re-register a device.
       - vaults:/home/obsidian
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/readyz"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 60s
+      start_period: 3m
 
 volumes:
   vaults:
