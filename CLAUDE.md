@@ -51,13 +51,17 @@ internal/oidcauth/     OIDC bearer-token validation for any compliant IdP:
                        fallback; tests run a real fake IdP over httptest
 internal/server/       MCP tool registration (official modelcontextprotocol/
                        go-sdk, typed handlers), HTTP handler with bearer auth
-                       middleware and unauthenticated /healthz
+                       middleware, process /livez, and sync-aware /readyz
 ```
 
 Key invariants:
 
 - **Fail-fast boot**: any login or `sync-setup` failure exits non-zero;
   never start serving a partially configured vault set.
+- **Sync-aware readiness**: every vault must emit a recent `Fully synced`
+  heartbeat. A silent continuous-sync child is restarted by the supervisor;
+  `/livez` must remain process-only so transient network failures do not
+  restart the whole container.
 - **Path sandboxing lives in `internal/vault`**, not in tool handlers.
   New file operations must use `resolve()`.
 - **Secrets never reach logs**: `bootstrap.redact()` masks `--password`

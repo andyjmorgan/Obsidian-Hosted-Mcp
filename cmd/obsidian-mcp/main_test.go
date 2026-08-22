@@ -42,8 +42,26 @@ func getenv(m map[string]string) func(string) string {
 	return func(key string) string { return m[key] }
 }
 
+func waitForStatus(t *testing.T, url string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		res, err := http.Get(url)
+		if err == nil {
+			res.Body.Close()
+			if res.StatusCode == want {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s did not return status %d", url, want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestRunServesUntilShutdown(t *testing.T) {
-	installFakeOb(t, `case "$1" in sync) exec sleep 60;; *) exit 0;; esac`)
+	installFakeOb(t, `case "$1" in sync) echo "Fully synced"; exec sleep 60;; *) exit 0;; esac`)
 	env := testEnv(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -64,14 +82,16 @@ func TestRunServesUntilShutdown(t *testing.T) {
 		t.Fatal("server did not become ready")
 	}
 
-	res, err := http.Get(fmt.Sprintf("http://%s/healthz", addr))
+	res, err := http.Get(fmt.Sprintf("http://%s/livez", addr))
 	if err != nil {
 		t.Fatal(err)
 	}
 	res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		t.Errorf("healthz status = %d", res.StatusCode)
+		t.Errorf("livez status = %d", res.StatusCode)
 	}
+	waitForStatus(t, fmt.Sprintf("http://%s/readyz", addr), http.StatusOK)
+	waitForStatus(t, fmt.Sprintf("http://%s/healthz", addr), http.StatusOK)
 
 	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s/", addr), strings.NewReader("{}"))
 	if err != nil {
