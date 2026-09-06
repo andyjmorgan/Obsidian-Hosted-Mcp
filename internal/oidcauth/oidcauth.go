@@ -20,8 +20,9 @@ import (
 
 // Verifier validates OIDC bearer tokens for one issuer/audience pair.
 type Verifier struct {
-	audience string
-	verifier *oidc.IDTokenVerifier
+	audience      string
+	requiredRoles []string
+	verifier      *oidc.IDTokenVerifier
 }
 
 // New builds a Verifier by fetching the provider's discovery document from
@@ -65,7 +66,8 @@ func New(ctx context.Context, cfg *config.OAuth, httpClient *http.Client) (*Veri
 	}
 	keySet := oidc.NewRemoteKeySet(oidc.ClientContext(ctx, httpClient), doc.JWKSURI)
 	return &Verifier{
-		audience: cfg.Audience,
+		audience:      cfg.Audience,
+		requiredRoles: cfg.RequiredRoles,
 		// Audience is checked by Verify below (aud with azp fallback), so
 		// skip go-oidc's strict single-client check.
 		verifier: oidc.NewVerifier(cfg.Issuer, keySet, &oidc.Config{SkipClientIDCheck: true}),
@@ -82,8 +84,15 @@ func (v *Verifier) Verify(ctx context.Context, token string) (*auth.TokenInfo, e
 		return nil, fmt.Errorf("%w: %v", auth.ErrInvalidToken, err)
 	}
 	var claims struct {
-		Azp   string `json:"azp"`
-		Scope string `json:"scope"`
+		Azp         string `json:"azp"`
+		Scope       string `json:"scope"`
+		RealmAccess struct {
+			Roles []string `json:"roles"`
+		} `json:"realm_access"`
+		ResourceAccess map[string]struct {
+			Roles []string `json:"roles"`
+		} `json:"resource_access"`
+		Roles []string `json:"roles"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
 		return nil, fmt.Errorf("%w: parsing claims: %v", auth.ErrInvalidToken, err)
@@ -91,6 +100,25 @@ func (v *Verifier) Verify(ctx context.Context, token string) (*auth.TokenInfo, e
 	if !slices.Contains(idToken.Audience, v.audience) && claims.Azp != v.audience {
 		return nil, fmt.Errorf("%w: token audience %v (azp %q) does not include %q",
 			auth.ErrInvalidToken, idToken.Audience, claims.Azp, v.audience)
+	}
+	if len(v.requiredRoles) > 0 {
+		present := make(map[string]struct{})
+		for _, r := range claims.RealmAccess.Roles {
+			present[r] = struct{}{}
+		}
+		for _, ra := range claims.ResourceAccess {
+			for _, r := range ra.Roles {
+				present[r] = struct{}{}
+			}
+		}
+		for _, r := range claims.Roles {
+			present[r] = struct{}{}
+		}
+		for _, need := range v.requiredRoles {
+			if _, ok := present[need]; !ok {
+				return nil, fmt.Errorf("%w: token missing required role %q", auth.ErrInvalidToken, need)
+			}
+		}
 	}
 	return &auth.TokenInfo{
 		UserID:     idToken.Subject,

@@ -135,6 +135,7 @@ exponential backoff; the MCP process and other vault syncs remain running.
 | `MCP_PUBLIC_URL` | with `OAUTH_ISSUER` | This server's canonical public URL, used as the protected-resource identifier. |
 | `OAUTH_INTERNAL_ISSUER` | no | Alternative base URL for fetching discovery/JWKS (e.g. cluster-internal). The discovery document must still report `OAUTH_ISSUER` as its issuer. |
 | `OAUTH_SCOPES` | no | Comma-separated scopes advertised as `scopes_supported`. Default `openid,profile,email`. |
+| `OAUTH_REQUIRED_ROLES` | no | Comma-separated roles the token must **all** carry (Keycloak `realm_access`/`resource_access`, or a flat `roles` claim), in addition to a valid audience. Empty (default) = audience-only. Use to bind the endpoint to specific principals (e.g. an owner role) regardless of which client the token came from. |
 | `OBSIDIAN_DEVICE_NAME` | no | Device name shown in sync version history. Defaults to `ObsidianMCP-` plus 8 random hex characters; set it explicitly so restarts reuse one device identity. |
 | `VAULTS_DIR` | no | Where vaults are synced locally. Defaults to `~/vaults`. |
 | `PORT` | no | HTTP listen port, default `8080`. |

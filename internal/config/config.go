@@ -44,6 +44,14 @@ type OAuth struct {
 	// Scopes are advertised to MCP clients in the protected-resource
 	// metadata as scopes_supported.
 	Scopes []string
+	// RequiredRoles, when non-empty, restricts access to tokens carrying ALL
+	// of these roles (from Keycloak realm_access/resource_access, or a flat
+	// roles claim), on top of a valid signature and issuer/audience/lifetime.
+	// Empty means audience-only — any valid, correctly-audienced token is
+	// accepted. Set via OAUTH_REQUIRED_ROLES (comma-separated). This binds the
+	// endpoint to specific principals (e.g. an owner role) without depending on
+	// which client the token came from.
+	RequiredRoles []string
 }
 
 // Config holds the full server configuration.
@@ -139,7 +147,7 @@ func Load(getenv Getenv, randSource io.Reader) (*Config, error) {
 func parseOAuth(getenv Getenv) (*OAuth, string, error) {
 	issuer := strings.TrimSuffix(strings.TrimSpace(getenv("OAUTH_ISSUER")), "/")
 	if issuer == "" {
-		for _, key := range []string{"OAUTH_AUDIENCE", "OAUTH_INTERNAL_ISSUER", "OAUTH_SCOPES"} {
+		for _, key := range []string{"OAUTH_AUDIENCE", "OAUTH_INTERNAL_ISSUER", "OAUTH_SCOPES", "OAUTH_REQUIRED_ROLES"} {
 			if getenv(key) != "" {
 				return nil, "", fmt.Errorf("%s is set but OAUTH_ISSUER is not: set OAUTH_ISSUER to enable OAuth", key)
 			}
@@ -167,6 +175,11 @@ func parseOAuth(getenv Getenv) (*OAuth, string, error) {
 	}
 	if len(o.Scopes) == 0 {
 		o.Scopes = []string{"openid", "profile", "email"}
+	}
+	for _, r := range strings.Split(getenv("OAUTH_REQUIRED_ROLES"), ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			o.RequiredRoles = append(o.RequiredRoles, r)
+		}
 	}
 	publicURL := strings.TrimSuffix(strings.TrimSpace(getenv("MCP_PUBLIC_URL")), "/")
 	if publicURL == "" {
