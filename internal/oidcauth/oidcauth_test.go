@@ -257,3 +257,49 @@ func TestNewErrors(t *testing.T) {
 		}
 	})
 }
+
+func (f *fakeIdP) verifierRoles(t *testing.T, roles ...string) *Verifier {
+	t.Helper()
+	v, err := New(context.Background(), &config.OAuth{
+		Issuer:        f.issuer,
+		Audience:      "obsidian-mcp",
+		RequiredRoles: roles,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func TestVerifyRequiredRealmRolePasses(t *testing.T) {
+	idp := newFakeIdP(t)
+	v := idp.verifierRoles(t, "obsidian-operator")
+	tok := idp.mint(idp.claims(func(c map[string]any) {
+		c["realm_access"] = map[string]any{"roles": []string{"obsidian-operator", "offline_access"}}
+	}))
+	if _, err := v.Verify(context.Background(), tok); err != nil {
+		t.Fatalf("expected accept with required realm role, got %v", err)
+	}
+}
+
+func TestVerifyMissingRequiredRoleRejected(t *testing.T) {
+	idp := newFakeIdP(t)
+	v := idp.verifierRoles(t, "obsidian-operator")
+	tok := idp.mint(idp.claims(func(c map[string]any) {
+		c["realm_access"] = map[string]any{"roles": []string{"offline_access"}}
+	}))
+	if _, err := v.Verify(context.Background(), tok); err == nil {
+		t.Fatal("expected rejection: valid, correctly-audienced token without the required role must be denied")
+	}
+}
+
+func TestVerifyRequiredRoleViaResourceAccess(t *testing.T) {
+	idp := newFakeIdP(t)
+	v := idp.verifierRoles(t, "obsidian-operator")
+	tok := idp.mint(idp.claims(func(c map[string]any) {
+		c["resource_access"] = map[string]any{"obsidian-mcp": map[string]any{"roles": []string{"obsidian-operator"}}}
+	}))
+	if _, err := v.Verify(context.Background(), tok); err != nil {
+		t.Fatalf("expected accept with required client role, got %v", err)
+	}
+}
