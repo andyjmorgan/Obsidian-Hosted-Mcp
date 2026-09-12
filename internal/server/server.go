@@ -19,7 +19,7 @@ import (
 )
 
 // Version is the server version reported to MCP clients.
-const Version = "0.5.0"
+const Version = "0.7.0"
 
 // Server wires vaults and search into an MCP tool set.
 type Server struct {
@@ -62,6 +62,16 @@ func (s *Server) MCPServer() *mcp.Server {
 		Description: fmt.Sprintf("Read a note from a vault. Returns at most %d characters per call; "+
 			"when the response is truncated, call again with offset set to next_offset to continue reading.", vault.ReadPageSize),
 	}, s.readNote)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "get_section",
+		Description: "Read a Markdown heading section's body, including nested subsections but excluding its heading. heading_path is an exact case-sensitive suffix of the heading hierarchy (Markdown title text without heading markers); ambiguous matches fail. Only document-level headings count, not headings in code, quotes, lists, or YAML frontmatter. Returns at most 10240 characters; continue with next_offset.",
+	}, s.getSection)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "replace_section",
+		Description: "Replace a Markdown heading section's entire body, including nested subsections, while preserving its heading. content excludes the selected heading. heading_path is an exact case-sensitive suffix of the heading hierarchy; missing or ambiguous matches fail. The section ends at the next heading of equal or higher rank. Adds newline separation when needed before a following heading.",
+	}, s.replaceSection)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "search_notes",
@@ -391,4 +401,38 @@ func (s *Server) deleteNote(_ context.Context, _ *mcp.CallToolRequest, in delete
 		return nil, deleteNoteOutput{}, err
 	}
 	return nil, deleteNoteOutput{OK: true, TrashedTo: trashedTo}, nil
+}
+
+type getSectionInput struct {
+	Vault       string   `json:"vault" jsonschema:"name of the vault"`
+	Path        string   `json:"path" jsonschema:"vault-relative path of the note"`
+	HeadingPath []string `json:"heading_path" jsonschema:"one or more exact heading titles from ancestor to target; a unique suffix of the full hierarchy"`
+	Offset      int      `json:"offset,omitempty" jsonschema:"character offset within the section body; defaults to zero"`
+}
+
+func (s *Server) getSection(_ context.Context, _ *mcp.CallToolRequest, in getSectionInput) (*mcp.CallToolResult, *vault.SectionResult, error) {
+	v, err := s.vault(in.Vault)
+	if err != nil {
+		return nil, nil, err
+	}
+	out, err := v.GetSection(in.Path, in.HeadingPath, in.Offset)
+	return nil, out, err
+}
+
+type replaceSectionInput struct {
+	Vault       string   `json:"vault" jsonschema:"name of the vault"`
+	Path        string   `json:"path" jsonschema:"vault-relative path of the note"`
+	HeadingPath []string `json:"heading_path" jsonschema:"one or more exact heading titles from ancestor to target; a unique suffix of the full hierarchy"`
+	Content     string   `json:"content" jsonschema:"replacement body including any desired subsections, without the selected heading; empty clears the body"`
+}
+
+func (s *Server) replaceSection(_ context.Context, _ *mcp.CallToolRequest, in replaceSectionInput) (*mcp.CallToolResult, okOutput, error) {
+	v, err := s.vault(in.Vault)
+	if err != nil {
+		return nil, okOutput{}, err
+	}
+	if err := v.ReplaceSection(in.Path, in.HeadingPath, in.Content); err != nil {
+		return nil, okOutput{}, err
+	}
+	return nil, okOutput{OK: true}, nil
 }

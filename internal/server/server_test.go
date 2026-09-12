@@ -63,6 +63,8 @@ func TestUnknownVaultRejectedByEveryTool(t *testing.T) {
 	}{
 		{"list_notes", func() error { _, _, err := s.listNotes(ctx, nil, listNotesInput{Vault: "Nope"}); return err }},
 		{"read_note", func() error { _, _, err := s.readNote(ctx, nil, readNoteInput{Vault: "Nope", Path: "x"}); return err }},
+		{"get_section", func() error { _, _, err := s.getSection(ctx, nil, getSectionInput{Vault: "Nope"}); return err }},
+		{"replace_section", func() error { _, _, err := s.replaceSection(ctx, nil, replaceSectionInput{Vault: "Nope"}); return err }},
 		{"search_notes", func() error {
 			_, _, err := s.searchNotes(ctx, nil, searchNotesInput{Vault: "Nope", Query: "x"})
 			return err
@@ -327,8 +329,8 @@ func TestEndToEndOverHTTP(t *testing.T) {
 	}
 	slices.Sort(names)
 	want := []string{
-		"append_note", "create_note", "delete_note", "edit_note",
-		"list_notes", "list_vaults", "move_note", "read_note",
+		"append_note", "create_note", "delete_note", "edit_note", "get_section",
+		"list_notes", "list_vaults", "move_note", "read_note", "replace_section",
 		"restore_note", "search_notes",
 	}
 	if !slices.Equal(names, want) {
@@ -511,4 +513,56 @@ func TestOIDCOnlyRejectsStaticToken(t *testing.T) {
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401 (no static token configured)", res.StatusCode)
 	}
+}
+
+func TestSectionToolsOverHTTP(t *testing.T) {
+	s := newTestServer(t)
+	ts := httptest.NewServer(s.Handler(AuthConfig{StaticToken: "secret"}))
+	defer ts.Close()
+	ctx := context.Background()
+	client := mcp.NewClient(&mcp.Implementation{Name: "section-test", Version: "1"}, nil)
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: ts.URL, HTTPClient: &http.Client{Transport: authTransport{token: "secret"}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	call := func(name string, args map[string]any, wantError bool) *mcp.CallToolResult {
+		t.Helper()
+		out, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.IsError != wantError {
+			t.Fatalf("%s: %+v", name, out)
+		}
+		return out
+	}
+	args := map[string]any{"vault": "Work", "path": "note.md", "heading_path": []string{"Note"}}
+	out := call("get_section", args, false)
+	data, err := json.Marshal(out.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var section vault.SectionResult
+	if err := json.Unmarshal(data, &section); err != nil {
+		t.Fatal(err)
+	}
+	if section.ReadResult == nil || section.Content != "\nhello world\n" || section.Level != 1 || !slices.Equal(section.HeadingPath, []string{"Note"}) {
+		t.Fatalf("section = %s", data)
+	}
+	args["content"] = "updated\n"
+	call("replace_section", args, false)
+	delete(args, "content")
+	out = call("get_section", args, false)
+	if !strings.Contains(out.Content[0].(*mcp.TextContent).Text, "updated") {
+		t.Fatalf("%+v", out)
+	}
+	args["heading_path"] = []string{"Missing"}
+	call("get_section", args, true)
+	args["content"] = "oops"
+	call("replace_section", args, true)
+	delete(args, "content")
+	call("replace_section", args, true) // required content is checked by the schema
+	delete(args, "heading_path")
+	call("get_section", args, true)
 }
