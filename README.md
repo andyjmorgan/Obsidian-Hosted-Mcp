@@ -138,6 +138,7 @@ exponential backoff; the MCP process and other vault syncs remain running.
 | `OAUTH_REQUIRED_ROLES` | no | Comma-separated roles the token must **all** carry (Keycloak `realm_access`/`resource_access`, or a flat `roles` claim), in addition to a valid audience. Empty (default) = audience-only. Use to bind the endpoint to specific principals (e.g. an owner role) regardless of which client the token came from. |
 | `OBSIDIAN_DEVICE_NAME` | no | Device name shown in sync version history. Defaults to `ObsidianMCP-` plus 8 random hex characters; set it explicitly so restarts reuse one device identity. |
 | `VAULTS_DIR` | no | Where vaults are synced locally. Defaults to `~/vaults`. |
+| `TASKS_FILE` | no | Vault-relative note the task tools read and write (same path in every vault). Defaults to `Reminders.md`. |
 | `PORT` | no | HTTP listen port, default `8080`. |
 
 ## OAuth: delegate auth to your identity provider
@@ -187,9 +188,53 @@ up automatically.
 | `move_note` | Move or rename a note. |
 | `delete_note` | Move a note to the vault's `.trash` (Obsidian's own convention, recoverable everywhere); `permanent: true` removes it outright. |
 | `restore_note` | Undelete: move a note out of `.trash`, back to its original name or an explicit destination. |
+| `list_tasks` | Reminders/tasks from the vault's reminders note: open by default, or `done`/`all`, optionally filtered by `section`. |
+| `get_task` | One task in full, with its subtasks. |
+| `create_task` | Add a reminder; `context` is mandatory. `parent_id` nests it as a subtask, otherwise it is filed under `section` (default `Inbox`). |
+| `update_task` | Change title, context, related notes, source or due date/time. |
+| `complete_task` | Tick a task and record its closure handoff (`resolution`); refuses while subtasks are open. |
+| `reopen_task` | Untick a completed task, keeping the closure note. |
+| `delete_task` | Remove a task and its subtasks. |
 
 All paths are vault-relative and sandboxed: absolute paths and `..` escapes
 are rejected.
+
+### Reminders and tasks
+
+The task tools turn one ordinary note (`TASKS_FILE`, default `Reminders.md`)
+into a reminder system every connected assistant shares. The note stays
+plain Markdown you can edit in Obsidian; the tools only give it structure:
+
+```markdown
+## Inbox
+
+- [ ] **Renew the domain** 📅 2026-10-20 ⏰ 09:00 ^rem-3f9a
+  - **Context:** The registrar sent a 30-day notice; auto-renew is off on purpose.
+  - **Related:** [[Domains]] · [[Billing]]
+  - **Source:** Planning call, 2026-10-04
+  - [ ] **Check the auto-renew flag** ^rem-b12c
+    - **Context:** Confirm it is still off before paying manually.
+```
+
+- Every checkbox line in the note is a task; indentation makes subtasks.
+  Checkboxes under a heading named `Template` are documentation and ignored,
+  as are code blocks and frontmatter.
+- Tasks are addressed by an Obsidian block reference (`^rem-xxxx`). Tasks
+  written by hand get one the first time any task tool reads the note; the
+  rest of the note is left byte-for-byte alone.
+- `create_task` requires `context` so a reminder still makes sense months
+  later without the conversation that created it. Due dates use the
+  `📅 YYYY-MM-DD ⏰ HH:MM` markers.
+- `complete_task` records `**Closed:** date — resolution` beneath the task
+  and refuses while direct subtasks are open, so a parent cannot be closed
+  over unfinished work.
+- Bullets the format does not model (e.g. `**Depends on:**`) are preserved
+  verbatim when a task is rewritten.
+
+[`skills/obsidian-tasks/SKILL.md`](skills/obsidian-tasks/SKILL.md) is a
+drop-in agent skill (Claude Code, or any system prompt) that teaches
+assistants to treat these tasks as first-class state and to use the task tools
+rather than editing the note as text.
 
 ### Working with heading sections
 

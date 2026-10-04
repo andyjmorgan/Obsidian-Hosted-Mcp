@@ -93,6 +93,13 @@ func TestUnknownVaultRejectedByEveryTool(t *testing.T) {
 			_, _, err := s.restoreNote(ctx, nil, restoreNoteInput{Vault: "Nope", Path: ".trash/x"})
 			return err
 		}},
+		{"list_tasks", func() error { _, _, err := s.listTasks(ctx, nil, listTasksInput{Vault: "Nope"}); return err }},
+		{"get_task", func() error { _, _, err := s.getTask(ctx, nil, taskRefInput{Vault: "Nope", ID: "x"}); return err }},
+		{"create_task", func() error { _, _, err := s.createTask(ctx, nil, createTaskInput{Vault: "Nope"}); return err }},
+		{"update_task", func() error { _, _, err := s.updateTask(ctx, nil, updateTaskInput{Vault: "Nope"}); return err }},
+		{"complete_task", func() error { _, _, err := s.completeTask(ctx, nil, completeTaskInput{Vault: "Nope"}); return err }},
+		{"reopen_task", func() error { _, _, err := s.reopenTask(ctx, nil, taskRefInput{Vault: "Nope"}); return err }},
+		{"delete_task", func() error { _, _, err := s.deleteTask(ctx, nil, taskRefInput{Vault: "Nope"}); return err }},
 	}
 	for _, c := range checks {
 		if err := c.call(); err == nil || !strings.Contains(err.Error(), "unknown vault") {
@@ -329,9 +336,10 @@ func TestEndToEndOverHTTP(t *testing.T) {
 	}
 	slices.Sort(names)
 	want := []string{
-		"append_note", "create_note", "delete_note", "edit_note", "get_section",
-		"list_notes", "list_vaults", "move_note", "read_note", "replace_section",
-		"restore_note", "search_notes",
+		"append_note", "complete_task", "create_note", "create_task", "delete_note", "delete_task",
+		"edit_note", "get_section", "get_task", "list_notes", "list_tasks", "list_vaults",
+		"move_note", "read_note", "reopen_task", "replace_section", "restore_note",
+		"search_notes", "update_task",
 	}
 	if !slices.Equal(names, want) {
 		t.Errorf("tools = %v, want %v", names, want)
@@ -565,4 +573,126 @@ func TestSectionToolsOverHTTP(t *testing.T) {
 	call("replace_section", args, true) // required content is checked by the schema
 	delete(args, "heading_path")
 	call("get_section", args, true)
+}
+
+// TestTaskToolsOverHTTP walks a reminder through its life over a real MCP
+// session: create, nest a subtask, list, update, refuse to close early,
+// close in order, reopen and delete — and checks the Markdown that lands
+// in the reminders note follows the documented convention.
+func TestTaskToolsOverHTTP(t *testing.T) {
+	s := newTestServer(t)
+	s.TasksFile = "Planning/Reminders.md"
+	ts := httptest.NewServer(s.Handler(AuthConfig{StaticToken: "secret"}))
+	defer ts.Close()
+	ctx := context.Background()
+	client := mcp.NewClient(&mcp.Implementation{Name: "task-test", Version: "1"}, nil)
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: ts.URL, HTTPClient: &http.Client{Transport: authTransport{token: "secret"}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	call := func(name string, args map[string]any, wantError bool) map[string]any {
+		t.Helper()
+		out, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.IsError != wantError {
+			t.Fatalf("%s(%v): %+v", name, args, out.Content)
+		}
+		if wantError {
+			return nil
+		}
+		data, err := json.Marshal(out.StructuredContent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	task := func(m map[string]any) map[string]any { return m["task"].(map[string]any) }
+	ctxText := "Agreed in the 2026-10-04 planning call; the registrar notice is in [[Domains]]."
+
+	if out := call("list_tasks", map[string]any{"vault": "Work"}, false); len(out["tasks"].([]any)) != 0 {
+		t.Fatalf("fresh store not empty: %v", out)
+	}
+	call("create_task", map[string]any{"vault": "Work", "title": "Renew domain", "context": "too short"}, true)
+	parent := task(call("create_task", map[string]any{
+		"vault": "Work", "title": "Renew domain", "context": ctxText, "related": []string{"Domains"},
+		"source": "Planning call 2026-10-04", "due": "2026-10-20", "due_time": "09:00",
+	}, false))
+	pid := parent["id"].(string)
+	if !strings.HasPrefix(pid, "rem-") || parent["section"] != "Inbox" || parent["due"] != "2026-10-20" {
+		t.Fatalf("parent = %v", parent)
+	}
+	child := task(call("create_task", map[string]any{
+		"vault": "Work", "title": "Check auto-renew flag", "context": ctxText, "parent_id": pid,
+	}, false))
+	cid := child["id"].(string)
+	if child["parent_id"] != pid || child["depth"].(float64) != 1 {
+		t.Fatalf("child = %v", child)
+	}
+
+	got := call("get_task", map[string]any{"vault": "Work", "id": pid}, false)
+	if task(got)["open_subtasks"].(float64) != 1 || len(got["subtasks"].([]any)) != 1 {
+		t.Fatalf("get_task = %v", got)
+	}
+	call("get_task", map[string]any{"vault": "Work", "id": "rem-nope"}, true)
+
+	listed := call("list_tasks", map[string]any{"vault": "Work", "status": "open"}, false)["tasks"].([]any)
+	if len(listed) != 2 {
+		t.Fatalf("list = %v", listed)
+	}
+	call("list_tasks", map[string]any{"vault": "Work", "status": "bogus"}, true)
+
+	updated := task(call("update_task", map[string]any{"vault": "Work", "id": cid, "title": "Check the auto-renew flag", "clear_due": true}, false))
+	if updated["title"] != "Check the auto-renew flag" {
+		t.Fatalf("update = %v", updated)
+	}
+	call("update_task", map[string]any{"vault": "Work", "id": cid, "due": "nope"}, true)
+
+	call("complete_task", map[string]any{"vault": "Work", "id": pid, "resolution": "Renewed for 2 years"}, true)
+	call("complete_task", map[string]any{"vault": "Work", "id": cid, "resolution": ""}, true)
+	call("complete_task", map[string]any{"vault": "Work", "id": cid, "resolution": "Flag was off; left off deliberately", "date": "2026-10-05"}, false)
+	done := task(call("complete_task", map[string]any{"vault": "Work", "id": pid, "resolution": "Renewed for 2 years, receipt in [[Billing]]"}, false))
+	if done["done"] != true || !strings.HasSuffix(done["closed"].(string), " — Renewed for 2 years, receipt in [[Billing]]") {
+		t.Fatalf("complete = %v", done)
+	}
+	if open := call("list_tasks", map[string]any{"vault": "Work"}, false)["tasks"].([]any); len(open) != 0 {
+		t.Fatalf("open after completion: %v", open)
+	}
+	if all := call("list_tasks", map[string]any{"vault": "Work", "status": "done", "section": "inbox"}, false)["tasks"].([]any); len(all) != 2 {
+		t.Fatalf("done list = %v", all)
+	}
+
+	note, err := os.ReadFile(filepath.Join(s.vaults["Work"].Root(), "Planning", "Reminders.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"## Inbox\n\n- [x] **Renew domain** 📅 2026-10-20 ⏰ 09:00 ^" + pid + "\n",
+		"  - **Context:** " + ctxText + "\n  - **Related:** [[Domains]]\n  - **Source:** Planning call 2026-10-04\n",
+		"  - **Closed:** " + time.Now().Format("2006-01-02") + " — Renewed for 2 years, receipt in [[Billing]]\n",
+		"  - [x] **Check the auto-renew flag** ^" + cid + "\n    - **Context:** " + ctxText + "\n    - **Closed:** 2026-10-05 — Flag was off; left off deliberately\n",
+	} {
+		if !strings.Contains(string(note), want) {
+			t.Errorf("note missing %q:\n%s", want, note)
+		}
+	}
+
+	reopened := task(call("reopen_task", map[string]any{"vault": "Work", "id": pid}, false))
+	if reopened["done"] != false {
+		t.Fatalf("reopen = %v", reopened)
+	}
+	call("reopen_task", map[string]any{"vault": "Work", "id": "rem-nope"}, true)
+	call("delete_task", map[string]any{"vault": "Work", "id": "rem-nope"}, true)
+	if out := call("delete_task", map[string]any{"vault": "Work", "id": pid}, false); out["ok"] != true {
+		t.Fatalf("delete = %v", out)
+	}
+	if all := call("list_tasks", map[string]any{"vault": "Work", "status": "all"}, false)["tasks"].([]any); len(all) != 0 {
+		t.Fatalf("tasks left after delete: %v", all)
+	}
 }

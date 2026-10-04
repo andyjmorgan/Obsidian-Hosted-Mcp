@@ -65,6 +65,9 @@ type Config struct {
 	Vaults []Vault
 	// VaultsDir is the local directory under which each vault is synced.
 	VaultsDir string
+	// TasksFile is the vault-relative note that stores reminders for the
+	// task tools, in every vault. Defaults to Reminders.md.
+	TasksFile string
 	// AuthToken is the static bearer token (API key) accepted on MCP
 	// requests. Optional when OAuth is configured.
 	AuthToken string
@@ -127,6 +130,15 @@ func Load(getenv Getenv, randSource io.Reader) (*Config, error) {
 			home = "/"
 		}
 		cfg.VaultsDir = filepath.Join(home, "vaults")
+	}
+
+	cfg.TasksFile = strings.TrimSpace(getenv("TASKS_FILE"))
+	if cfg.TasksFile == "" {
+		cfg.TasksFile = "Reminders.md"
+	}
+	if clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(cfg.TasksFile))); filepath.IsAbs(cfg.TasksFile) ||
+		clean == ".." || strings.HasPrefix(clean, "../") || !strings.HasSuffix(clean, ".md") {
+		return nil, fmt.Errorf("TASKS_FILE must be a vault-relative .md path, got %q", cfg.TasksFile)
 	}
 
 	cfg.Port = DefaultPort
