@@ -49,6 +49,10 @@ internal/oidcauth/     OIDC bearer-token validation for any compliant IdP:
                        discovery (with internal-issuer override), JWKS via
                        go-oidc, audience check with Keycloak-style azp
                        fallback; tests run a real fake IdP over httptest
+internal/tasks/        reminders as first-class tasks over one Markdown note:
+                       line-based parser for checkbox + field bullets, block-ref
+                       ids (^rem-xxxx) assigned on first read, block-scoped
+                       rewrites so hand-written text survives
 internal/server/       MCP tool registration (official modelcontextprotocol/
                        go-sdk, typed handlers), HTTP handler with bearer auth
                        middleware, process /livez, and sync-aware /readyz

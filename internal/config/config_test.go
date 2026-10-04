@@ -42,6 +42,24 @@ func TestLoadDefaults(t *testing.T) {
 	if len(cfg.Vaults) != 1 || cfg.Vaults[0] != (Vault{Name: "Notes"}) {
 		t.Errorf("Vaults = %+v", cfg.Vaults)
 	}
+	if cfg.TasksFile != "Reminders.md" {
+		t.Errorf("TasksFile = %q", cfg.TasksFile)
+	}
+}
+
+func TestTasksFile(t *testing.T) {
+	m := validEnv()
+	m["TASKS_FILE"] = " Planning/Tasks.md "
+	cfg, err := Load(env(m), rand.Reader)
+	if err != nil || cfg.TasksFile != "Planning/Tasks.md" {
+		t.Errorf("TasksFile = %q, %v", cfg.TasksFile, err)
+	}
+	for _, bad := range []string{"/abs/Tasks.md", "../Tasks.md", "..", "Tasks.txt"} {
+		m["TASKS_FILE"] = bad
+		if _, err := Load(env(m), rand.Reader); err == nil {
+			t.Errorf("TASKS_FILE=%q accepted", bad)
+		}
+	}
 }
 
 func TestLoadExplicitValues(t *testing.T) {

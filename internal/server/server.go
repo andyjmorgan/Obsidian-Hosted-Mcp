@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	"fmt"
 	"net/http"
@@ -15,11 +16,12 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
 
 	"github.com/andyjmorgan/obsidian-hosted-mcp/internal/search"
+	"github.com/andyjmorgan/obsidian-hosted-mcp/internal/tasks"
 	"github.com/andyjmorgan/obsidian-hosted-mcp/internal/vault"
 )
 
 // Version is the server version reported to MCP clients.
-const Version = "0.7.0"
+const Version = "0.8.0"
 
 // Server wires vaults and search into an MCP tool set.
 type Server struct {
@@ -27,6 +29,8 @@ type Server struct {
 	searcher *search.Searcher
 	// syncReady reports whether every vault has a fresh sync heartbeat.
 	syncReady func() bool
+	// TasksFile is the vault-relative note the task tools read and write.
+	TasksFile string
 }
 
 // New returns a Server over the given vaults.
@@ -35,7 +39,7 @@ func New(vaults []*vault.Vault, searcher *search.Searcher, syncReady func() bool
 	for _, v := range vaults {
 		m[v.Name()] = v
 	}
-	return &Server{vaults: m, searcher: searcher, syncReady: syncReady}
+	return &Server{vaults: m, searcher: searcher, syncReady: syncReady, TasksFile: tasks.DefaultFile}
 }
 
 // MCPServer builds the MCP server with all tools registered.
@@ -111,6 +115,51 @@ func (s *Server) MCPServer() *mcp.Server {
 		Description: "Restore (undelete) a note from the vault's .trash folder. Restores to the note's path inside .trash " +
 			"unless to is set; use list_notes with dir \".trash\" to see what can be restored.",
 	}, s.restoreNote)
+
+	// Reminders / tasks: a first-class view over the vault's reminders note
+	// (Markdown checkboxes with contextual records beneath them). Use these
+	// instead of editing the note as text so context, subtasks and closure
+	// handoffs stay consistent across every agent.
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "list_tasks",
+		Description: "List reminders/tasks from the vault's reminders note (" + tasks.DefaultFile + " unless the server is configured otherwise). " +
+			"Returns open tasks by default, in file order, each with its id, section, due date, context and nesting (parent_id, depth). " +
+			"Use this to answer what is outstanding, what is due, or to find the id for another task tool.",
+	}, s.listTasks)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "get_task",
+		Description: "Read one reminder/task in full by id, with its subtasks flattened in file order.",
+	}, s.getTask)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "create_task",
+		Description: "Add a reminder/task. context is mandatory and must explain why it exists so it is useful without this conversation: " +
+			"what was decided or observed, why the follow-up matters, and where the details live. Link related notes with related. " +
+			"Set parent_id to add a subtask; otherwise the task is filed at the end of section (default " + tasks.DefaultSection + ").",
+	}, s.createTask)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "update_task",
+		Description: "Change a reminder/task's title, context, related notes, source or due date/time. Omitted fields are left alone; " +
+			"pass related as an empty list to clear links and clear_due to remove the due date and time.",
+	}, s.updateTask)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "complete_task",
+		Description: "Tick a reminder/task and record its closure handoff: how it was resolved, what changed or was delivered, why, " +
+			"and any residual follow-up, with links to resulting notes or PRs. Refuses while the task still has open subtasks.",
+	}, s.completeTask)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "reopen_task",
+		Description: "Untick a completed reminder/task. The earlier closure note is kept for the record.",
+	}, s.reopenTask)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "delete_task",
+		Description: "Remove a reminder/task and its subtasks from the reminders note. Prefer complete_task when the work was actually done.",
+	}, s.deleteTask)
 
 	return srv
 }
@@ -432,6 +481,159 @@ func (s *Server) replaceSection(_ context.Context, _ *mcp.CallToolRequest, in re
 		return nil, okOutput{}, err
 	}
 	if err := v.ReplaceSection(in.Path, in.HeadingPath, in.Content); err != nil {
+		return nil, okOutput{}, err
+	}
+	return nil, okOutput{OK: true}, nil
+}
+
+// taskStore returns the reminders store for a vault.
+func (s *Server) taskStore(name string) (*tasks.Store, error) {
+	v, err := s.vault(name)
+	if err != nil {
+		return nil, err
+	}
+	return tasks.New(v, s.TasksFile, rand.Reader, time.Now), nil
+}
+
+type listTasksInput struct {
+	Vault   string `json:"vault" jsonschema:"name of the vault"`
+	Status  string `json:"status,omitempty" jsonschema:"open (default), done or all"`
+	Section string `json:"section,omitempty" jsonschema:"only tasks filed under this heading"`
+}
+
+type listTasksOutput struct {
+	Tasks []tasks.Task `json:"tasks" jsonschema:"matching tasks in file order, subtasks included"`
+}
+
+func (s *Server) listTasks(_ context.Context, _ *mcp.CallToolRequest, in listTasksInput) (*mcp.CallToolResult, listTasksOutput, error) {
+	st, err := s.taskStore(in.Vault)
+	if err != nil {
+		return nil, listTasksOutput{}, err
+	}
+	list, err := st.List(tasks.Status(in.Status), in.Section)
+	if err != nil {
+		return nil, listTasksOutput{}, err
+	}
+	return nil, listTasksOutput{Tasks: list}, nil
+}
+
+type taskRefInput struct {
+	Vault string `json:"vault" jsonschema:"name of the vault"`
+	ID    string `json:"id" jsonschema:"task id from list_tasks"`
+}
+
+type getTaskOutput struct {
+	Task     tasks.Task   `json:"task"`
+	Subtasks []tasks.Task `json:"subtasks" jsonschema:"all descendants, depth-first in file order"`
+}
+
+func (s *Server) getTask(_ context.Context, _ *mcp.CallToolRequest, in taskRefInput) (*mcp.CallToolResult, getTaskOutput, error) {
+	st, err := s.taskStore(in.Vault)
+	if err != nil {
+		return nil, getTaskOutput{}, err
+	}
+	t, subs, err := st.Get(in.ID)
+	if err != nil {
+		return nil, getTaskOutput{}, err
+	}
+	return nil, getTaskOutput{Task: *t, Subtasks: subs}, nil
+}
+
+type createTaskInput struct {
+	Vault    string   `json:"vault" jsonschema:"name of the vault"`
+	Title    string   `json:"title" jsonschema:"the clear action to take"`
+	Context  string   `json:"context" jsonschema:"why this came up, what was decided or observed, and why the follow-up matters"`
+	Related  []string `json:"related,omitempty" jsonschema:"note names or paths to link as [[wikilinks]]"`
+	Source   string   `json:"source,omitempty" jsonschema:"where the reminder came from, e.g. a conversation, meeting or note, with a date"`
+	Due      string   `json:"due,omitempty" jsonschema:"due date YYYY-MM-DD, only for a genuine deadline or follow-up point"`
+	DueTime  string   `json:"due_time,omitempty" jsonschema:"due time HH:MM (24-hour)"`
+	ParentID string   `json:"parent_id,omitempty" jsonschema:"id of the task to nest this under as a subtask"`
+	Section  string   `json:"section,omitempty" jsonschema:"heading to file a top-level task under; created if missing"`
+}
+
+type taskOutput struct {
+	Task tasks.Task `json:"task"`
+}
+
+func (s *Server) createTask(_ context.Context, _ *mcp.CallToolRequest, in createTaskInput) (*mcp.CallToolResult, taskOutput, error) {
+	st, err := s.taskStore(in.Vault)
+	if err != nil {
+		return nil, taskOutput{}, err
+	}
+	t, err := st.Create(tasks.CreateInput{
+		Title: in.Title, Context: in.Context, Related: in.Related, Source: in.Source,
+		Due: in.Due, DueTime: in.DueTime, ParentID: in.ParentID, Section: in.Section,
+	})
+	if err != nil {
+		return nil, taskOutput{}, err
+	}
+	return nil, taskOutput{Task: *t}, nil
+}
+
+type updateTaskInput struct {
+	Vault    string   `json:"vault" jsonschema:"name of the vault"`
+	ID       string   `json:"id" jsonschema:"task id from list_tasks"`
+	Title    string   `json:"title,omitempty" jsonschema:"new action text"`
+	Context  string   `json:"context,omitempty" jsonschema:"replacement context"`
+	Related  []string `json:"related,omitempty" jsonschema:"replacement list of related notes; empty list clears"`
+	Source   string   `json:"source,omitempty" jsonschema:"replacement source"`
+	Due      string   `json:"due,omitempty" jsonschema:"new due date YYYY-MM-DD"`
+	DueTime  string   `json:"due_time,omitempty" jsonschema:"new due time HH:MM"`
+	ClearDue bool     `json:"clear_due,omitempty" jsonschema:"remove the due date and time"`
+}
+
+func (s *Server) updateTask(_ context.Context, _ *mcp.CallToolRequest, in updateTaskInput) (*mcp.CallToolResult, taskOutput, error) {
+	st, err := s.taskStore(in.Vault)
+	if err != nil {
+		return nil, taskOutput{}, err
+	}
+	t, err := st.Update(in.ID, tasks.UpdateInput{
+		Title: in.Title, Context: in.Context, Related: in.Related, Source: in.Source,
+		Due: in.Due, DueTime: in.DueTime, ClearDue: in.ClearDue,
+	})
+	if err != nil {
+		return nil, taskOutput{}, err
+	}
+	return nil, taskOutput{Task: *t}, nil
+}
+
+type completeTaskInput struct {
+	Vault      string `json:"vault" jsonschema:"name of the vault"`
+	ID         string `json:"id" jsonschema:"task id from list_tasks"`
+	Resolution string `json:"resolution" jsonschema:"closure handoff: how it was resolved, what changed, why, and any follow-up, with links"`
+	Date       string `json:"date,omitempty" jsonschema:"completion date YYYY-MM-DD; defaults to today"`
+}
+
+func (s *Server) completeTask(_ context.Context, _ *mcp.CallToolRequest, in completeTaskInput) (*mcp.CallToolResult, taskOutput, error) {
+	st, err := s.taskStore(in.Vault)
+	if err != nil {
+		return nil, taskOutput{}, err
+	}
+	t, err := st.Complete(in.ID, in.Resolution, in.Date)
+	if err != nil {
+		return nil, taskOutput{}, err
+	}
+	return nil, taskOutput{Task: *t}, nil
+}
+
+func (s *Server) reopenTask(_ context.Context, _ *mcp.CallToolRequest, in taskRefInput) (*mcp.CallToolResult, taskOutput, error) {
+	st, err := s.taskStore(in.Vault)
+	if err != nil {
+		return nil, taskOutput{}, err
+	}
+	t, err := st.Reopen(in.ID)
+	if err != nil {
+		return nil, taskOutput{}, err
+	}
+	return nil, taskOutput{Task: *t}, nil
+}
+
+func (s *Server) deleteTask(_ context.Context, _ *mcp.CallToolRequest, in taskRefInput) (*mcp.CallToolResult, okOutput, error) {
+	st, err := s.taskStore(in.Vault)
+	if err != nil {
+		return nil, okOutput{}, err
+	}
+	if err := st.Delete(in.ID); err != nil {
 		return nil, okOutput{}, err
 	}
 	return nil, okOutput{OK: true}, nil
