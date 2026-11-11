@@ -720,6 +720,12 @@ func TestToolAnnotationsOverHTTP(t *testing.T) {
 	if init == nil || init.ServerInfo == nil {
 		t.Fatal("no InitializeResult/ServerInfo")
 	}
+	// The handler is stateless so the sessionless 2026-07-28 protocol is
+	// negotiated by a current client (via server/discover) rather than
+	// falling back to 2025-11-25.
+	if init.ProtocolVersion != "2026-07-28" {
+		t.Fatalf("negotiated %q, want 2026-07-28", init.ProtocolVersion)
+	}
 	if len(init.ServerInfo.Icons) == 0 {
 		t.Error("serverInfo has no Icons")
 	}

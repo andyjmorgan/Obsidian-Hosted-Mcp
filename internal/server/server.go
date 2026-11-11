@@ -21,7 +21,7 @@ import (
 )
 
 // Version is the server version reported to MCP clients.
-const Version = "0.10.0"
+const Version = "0.11.0"
 
 // Server wires vaults and search into an MCP tool set.
 type Server struct {
@@ -306,9 +306,12 @@ type AuthConfig struct {
 // protected-resource metadata when OIDC is enabled, and the bearer-protected
 // MCP endpoint everywhere else.
 func (s *Server) Handler(authCfg AuthConfig) http.Handler {
+	// Stateless: the 2026-07-28 protocol is sessionless (SEP-2567), and the
+	// SDK only advertises it on a stateless handler. Nothing here needs a
+	// session: no server-initiated requests, no resumable streams.
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return s.MCPServer()
-	}, nil)
+	}, &mcp.StreamableHTTPOptions{Stateless: true})
 	mux := http.NewServeMux()
 	mux.HandleFunc("/livez", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
