@@ -696,3 +696,81 @@ func TestTaskToolsOverHTTP(t *testing.T) {
 		t.Fatalf("tasks left after delete: %v", all)
 	}
 }
+
+// TestToolAnnotationsOverHTTP checks every tool advertises a title and all
+// four behaviour hints, with DestructiveHint and OpenWorldHint set
+// explicitly because their spec default is true.
+func TestToolAnnotationsOverHTTP(t *testing.T) {
+	s := newTestServer(t)
+	ts := httptest.NewServer(s.Handler(AuthConfig{StaticToken: "secret"}))
+	defer ts.Close()
+
+	ctx := context.Background()
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.0.1"}, nil)
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint:   ts.URL,
+		HTTPClient: &http.Client{Transport: authTransport{token: "secret"}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	tools, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// readOnly, destructive, idempotent per tool; openWorld is always false.
+	type hints struct{ readOnly, destructive, idempotent bool }
+	want := map[string]hints{
+		"list_vaults":     {true, false, true},
+		"list_notes":      {true, false, true},
+		"read_note":       {true, false, true},
+		"get_section":     {true, false, true},
+		"search_notes":    {true, false, true},
+		"list_tasks":      {true, false, true},
+		"get_task":        {true, false, true},
+		"create_note":     {false, false, true},
+		"create_task":     {false, false, false},
+		"append_note":     {false, false, false},
+		"edit_note":       {false, true, true},
+		"replace_section": {false, true, true},
+		"update_task":     {false, true, true},
+		"move_note":       {false, false, true},
+		"delete_note":     {false, true, true},
+		"delete_task":     {false, true, true},
+		"restore_note":    {false, false, true},
+		"complete_task":   {false, false, true},
+		"reopen_task":     {false, false, true},
+	}
+	if len(tools.Tools) != len(want) {
+		t.Errorf("got %d tools, want %d", len(tools.Tools), len(want))
+	}
+	for _, tool := range tools.Tools {
+		w, ok := want[tool.Name]
+		if !ok {
+			t.Errorf("tool %s has no expected annotations", tool.Name)
+			continue
+		}
+		if tool.Title == "" {
+			t.Errorf("%s: empty Title", tool.Name)
+		}
+		a := tool.Annotations
+		if a == nil {
+			t.Errorf("%s: nil Annotations", tool.Name)
+			continue
+		}
+		if a.DestructiveHint == nil || a.OpenWorldHint == nil {
+			t.Errorf("%s: DestructiveHint/OpenWorldHint must be set explicitly", tool.Name)
+			continue
+		}
+		got := hints{a.ReadOnlyHint, *a.DestructiveHint, a.IdempotentHint}
+		if got != w {
+			t.Errorf("%s: hints = %+v, want %+v", tool.Name, got, w)
+		}
+		if *a.OpenWorldHint {
+			t.Errorf("%s: OpenWorldHint = true, want false (the vault is a closed domain)", tool.Name)
+		}
+	}
+}

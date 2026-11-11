@@ -21,7 +21,7 @@ import (
 )
 
 // Version is the server version reported to MCP clients.
-const Version = "0.8.1"
+const Version = "0.9.0"
 
 // Server wires vaults and search into an MCP tool set.
 type Server struct {
@@ -52,66 +52,90 @@ func (s *Server) MCPServer() *mcp.Server {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "list_vaults",
+		Title:       "List vaults",
+		Annotations: readAnn(),
 		Description: "List the Obsidian vaults available on this server.",
 	}, s.listVaults)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "list_notes",
+		Name:        "list_notes",
+		Title:       "List notes",
+		Annotations: readAnn(),
 		Description: "List notes and directories in a vault. Hidden folders such as .obsidian and .trash are excluded, " +
 			"but passing dir \".trash\" lists deleted notes explicitly.",
 	}, s.listNotes)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "read_note",
+		Name:        "read_note",
+		Title:       "Read note",
+		Annotations: readAnn(),
 		Description: fmt.Sprintf("Read a note from a vault. Returns at most %d characters per call; "+
 			"when the response is truncated, call again with offset set to next_offset to continue reading.", vault.ReadPageSize),
 	}, s.readNote)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "get_section",
+		Title:       "Get section",
+		Annotations: readAnn(),
 		Description: "Read a Markdown heading section's body, including nested subsections but excluding its heading. heading_path is an exact case-sensitive suffix of the heading hierarchy (Markdown title text without heading markers); ambiguous matches fail. Only document-level headings count, not headings in code, quotes, lists, or YAML frontmatter. Returns at most 10240 characters; continue with next_offset.",
 	}, s.getSection)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "replace_section",
+		Title:       "Replace section",
+		Annotations: overwriteAnn(),
 		Description: "Replace a Markdown heading section's entire body, including nested subsections, while preserving its heading. content excludes the selected heading. heading_path is an exact case-sensitive suffix of the heading hierarchy; missing or ambiguous matches fail. The section ends at the next heading of equal or higher rank. Adds newline separation when needed before a following heading.",
 	}, s.replaceSection)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "search_notes",
+		Name:        "search_notes",
+		Title:       "Search notes",
+		Annotations: readAnn(),
 		Description: "Full-text regex search across a vault (ripgrep syntax). Returns matching lines grouped by file, " +
 			"optionally with surrounding context lines. Case-insensitive unless case_sensitive is set.",
 	}, s.searchNotes)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "create_note",
+		Title:       "Create note",
+		Annotations: additiveAnn(true),
 		Description: "Create a new note. Parent directories are created automatically; fails if the note already exists.",
 	}, s.createNote)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "append_note",
+		Title:       "Append to note",
+		Annotations: additiveAnn(false),
 		Description: "Append content to a note, creating it if it does not exist.",
 	}, s.appendNote)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "edit_note",
+		Name:        "edit_note",
+		Title:       "Edit note",
+		Annotations: overwriteAnn(),
 		Description: "Edit a note by replacing an exact text snippet. The snippet must occur exactly once " +
 			"unless replace_all is set; include surrounding lines to make it unique.",
 	}, s.editNote)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "move_note",
+		Title:       "Move note",
+		Annotations: additiveAnn(true),
 		Description: "Move or rename a note within a vault. Fails if the destination already exists.",
 	}, s.moveNote)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "delete_note",
+		Name:        "delete_note",
+		Title:       "Delete note",
+		Annotations: overwriteAnn(),
 		Description: "Delete a note. By default it is moved to the vault's .trash folder (recoverable with restore_note); " +
 			"set permanent to remove it outright.",
 	}, s.deleteNote)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "restore_note",
+		Name:        "restore_note",
+		Title:       "Restore note",
+		Annotations: additiveAnn(true),
 		Description: "Restore (undelete) a note from the vault's .trash folder. Restores to the note's path inside .trash " +
 			"unless to is set; use list_notes with dir \".trash\" to see what can be restored.",
 	}, s.restoreNote)
@@ -121,7 +145,9 @@ func (s *Server) MCPServer() *mcp.Server {
 	// instead of editing the note as text so context, subtasks and closure
 	// handoffs stay consistent across every agent.
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "list_tasks",
+		Name:        "list_tasks",
+		Title:       "List tasks",
+		Annotations: readAnn(),
 		Description: "List reminders/tasks from the vault's reminders note (" + tasks.DefaultFile + " unless the server is configured otherwise). " +
 			"Returns open tasks by default, in file order, each with its id, section, due date, context and nesting (parent_id, depth). " +
 			"Use this to answer what is outstanding, what is due, or to find the id for another task tool.",
@@ -129,40 +155,87 @@ func (s *Server) MCPServer() *mcp.Server {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "get_task",
+		Title:       "Get task",
+		Annotations: readAnn(),
 		Description: "Read one reminder/task in full by id, with its subtasks flattened in file order.",
 	}, s.getTask)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "create_task",
+		Name:        "create_task",
+		Title:       "Create task",
+		Annotations: additiveAnn(false),
 		Description: "Add a reminder/task. context is mandatory and must explain why it exists so it is useful without this conversation: " +
 			"what was decided or observed, why the follow-up matters, and where the details live. Link related notes with related. " +
 			"Set parent_id to add a subtask; otherwise the task is filed at the end of section (default " + tasks.DefaultSection + ").",
 	}, s.createTask)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "update_task",
+		Name:        "update_task",
+		Title:       "Update task",
+		Annotations: overwriteAnn(),
 		Description: "Change a reminder/task's title, context, related notes, source or due date/time. Omitted fields are left alone; " +
 			"pass related as an empty list to clear links and clear_due to remove the due date and time.",
 	}, s.updateTask)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "complete_task",
+		Name:        "complete_task",
+		Title:       "Complete task",
+		Annotations: additiveAnn(true),
 		Description: "Tick a reminder/task and record its closure handoff: how it was resolved, what changed or was delivered, why, " +
 			"and any residual follow-up, with links to resulting notes or PRs. Refuses while the task still has open subtasks.",
 	}, s.completeTask)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "reopen_task",
+		Title:       "Reopen task",
+		Annotations: additiveAnn(true),
 		Description: "Untick a completed reminder/task. The earlier closure note is kept for the record.",
 	}, s.reopenTask)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "delete_task",
+		Title:       "Delete task",
+		Annotations: overwriteAnn(),
 		Description: "Remove a reminder/task and its subtasks from the reminders note. Prefer complete_task when the work was actually done.",
 	}, s.deleteTask)
 
 	return srv
 }
+
+// The vault is a closed domain, so every tool sets OpenWorldHint false.
+// DestructiveHint and OpenWorldHint are pointers whose spec default is true,
+// so they are always set explicitly.
+
+// readAnn annotates tools that only read the vault.
+func readAnn() *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{
+		ReadOnlyHint:    true,
+		DestructiveHint: ptr(false),
+		IdempotentHint:  true,
+		OpenWorldHint:   ptr(false),
+	}
+}
+
+// additiveAnn annotates writes that never overwrite or remove content.
+func additiveAnn(idempotent bool) *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{
+		DestructiveHint: ptr(false),
+		IdempotentHint:  idempotent,
+		OpenWorldHint:   ptr(false),
+	}
+}
+
+// overwriteAnn annotates writes that overwrite or remove existing content;
+// repeating the same call has no further effect.
+func overwriteAnn() *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{
+		DestructiveHint: ptr(true),
+		IdempotentHint:  true,
+		OpenWorldHint:   ptr(false),
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
 
 // metadataPath is where RFC 9728 protected-resource metadata is served
 // when OIDC delegation is enabled.
