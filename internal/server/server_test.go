@@ -716,6 +716,17 @@ func TestToolAnnotationsOverHTTP(t *testing.T) {
 	}
 	defer session.Close()
 
+	init := session.InitializeResult()
+	if init == nil || init.ServerInfo == nil {
+		t.Fatal("no InitializeResult/ServerInfo")
+	}
+	if len(init.ServerInfo.Icons) == 0 {
+		t.Error("serverInfo has no Icons")
+	}
+	if init.ServerInfo.WebsiteURL != "https://obsidian.md" {
+		t.Errorf("serverInfo.WebsiteURL = %q", init.ServerInfo.WebsiteURL)
+	}
+
 	tools, err := session.ListTools(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -755,6 +766,14 @@ func TestToolAnnotationsOverHTTP(t *testing.T) {
 		}
 		if tool.Title == "" {
 			t.Errorf("%s: empty Title", tool.Name)
+		}
+		if len(tool.Icons) == 0 {
+			t.Errorf("%s: no Icons", tool.Name)
+		}
+		for _, ic := range tool.Icons {
+			if !strings.HasPrefix(ic.Source, "https://") {
+				t.Errorf("%s: icon source %q is not https", tool.Name, ic.Source)
+			}
 		}
 		a := tool.Annotations
 		if a == nil {

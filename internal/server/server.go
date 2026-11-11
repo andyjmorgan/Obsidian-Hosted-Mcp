@@ -21,7 +21,7 @@ import (
 )
 
 // Version is the server version reported to MCP clients.
-const Version = "0.9.0"
+const Version = "0.10.0"
 
 // Server wires vaults and search into an MCP tool set.
 type Server struct {
@@ -45,15 +45,18 @@ func New(vaults []*vault.Vault, searcher *search.Searcher, syncReady func() bool
 // MCPServer builds the MCP server with all tools registered.
 func (s *Server) MCPServer() *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{
-		Name:    "obsidian-hosted-mcp",
-		Title:   "Obsidian Hosted MCP",
-		Version: Version,
+		Name:       "obsidian-hosted-mcp",
+		Title:      "Obsidian Hosted MCP",
+		Version:    Version,
+		WebsiteURL: "https://obsidian.md",
+		Icons:      icons,
 	}, nil)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "list_vaults",
 		Title:       "List vaults",
 		Annotations: readAnn(),
+		Icons:       icons,
 		Description: "List the Obsidian vaults available on this server.",
 	}, s.listVaults)
 
@@ -61,6 +64,7 @@ func (s *Server) MCPServer() *mcp.Server {
 		Name:        "list_notes",
 		Title:       "List notes",
 		Annotations: readAnn(),
+		Icons:       icons,
 		Description: "List notes and directories in a vault. Hidden folders such as .obsidian and .trash are excluded, " +
 			"but passing dir \".trash\" lists deleted notes explicitly.",
 	}, s.listNotes)
@@ -69,6 +73,7 @@ func (s *Server) MCPServer() *mcp.Server {
 		Name:        "read_note",
 		Title:       "Read note",
 		Annotations: readAnn(),
+		Icons:       icons,
 		Description: fmt.Sprintf("Read a note from a vault. Returns at most %d characters per call; "+
 			"when the response is truncated, call again with offset set to next_offset to continue reading.", vault.ReadPageSize),
 	}, s.readNote)
@@ -77,6 +82,7 @@ func (s *Server) MCPServer() *mcp.Server {
 		Name:        "get_section",
 		Title:       "Get section",
 		Annotations: readAnn(),
+		Icons:       icons,
 		Description: "Read a Markdown heading section's body, including nested subsections but excluding its heading. heading_path is an exact case-sensitive suffix of the heading hierarchy (Markdown title text without heading markers); ambiguous matches fail. Only document-level headings count, not headings in code, quotes, lists, or YAML frontmatter. Returns at most 10240 characters; continue with next_offset.",
 	}, s.getSection)
 
@@ -84,6 +90,7 @@ func (s *Server) MCPServer() *mcp.Server {
 		Name:        "replace_section",
 		Title:       "Replace section",
 		Annotations: overwriteAnn(),
+		Icons:       icons,
 		Description: "Replace a Markdown heading section's entire body, including nested subsections, while preserving its heading. content excludes the selected heading. heading_path is an exact case-sensitive suffix of the heading hierarchy; missing or ambiguous matches fail. The section ends at the next heading of equal or higher rank. Adds newline separation when needed before a following heading.",
 	}, s.replaceSection)
 
@@ -91,6 +98,7 @@ func (s *Server) MCPServer() *mcp.Server {
 		Name:        "search_notes",
 		Title:       "Search notes",
 		Annotations: readAnn(),
+		Icons:       icons,
 		Description: "Full-text regex search across a vault (ripgrep syntax). Returns matching lines grouped by file, " +
 			"optionally with surrounding context lines. Case-insensitive unless case_sensitive is set.",
 	}, s.searchNotes)
@@ -99,6 +107,7 @@ func (s *Server) MCPServer() *mcp.Server {
 		Name:        "create_note",
 		Title:       "Create note",
 		Annotations: additiveAnn(true),
+		Icons:       icons,
 		Description: "Create a new note. Parent directories are created automatically; fails if the note already exists.",
 	}, s.createNote)
 
@@ -106,6 +115,7 @@ func (s *Server) MCPServer() *mcp.Server {
 		Name:        "append_note",
 		Title:       "Append to note",
 		Annotations: additiveAnn(false),
+		Icons:       icons,
 		Description: "Append content to a note, creating it if it does not exist.",
 	}, s.appendNote)
 
@@ -113,6 +123,7 @@ func (s *Server) MCPServer() *mcp.Server {
 		Name:        "edit_note",
 		Title:       "Edit note",
 		Annotations: overwriteAnn(),
+		Icons:       icons,
 		Description: "Edit a note by replacing an exact text snippet. The snippet must occur exactly once " +
 			"unless replace_all is set; include surrounding lines to make it unique.",
 	}, s.editNote)
@@ -121,6 +132,7 @@ func (s *Server) MCPServer() *mcp.Server {
 		Name:        "move_note",
 		Title:       "Move note",
 		Annotations: additiveAnn(true),
+		Icons:       icons,
 		Description: "Move or rename a note within a vault. Fails if the destination already exists.",
 	}, s.moveNote)
 
@@ -128,6 +140,7 @@ func (s *Server) MCPServer() *mcp.Server {
 		Name:        "delete_note",
 		Title:       "Delete note",
 		Annotations: overwriteAnn(),
+		Icons:       icons,
 		Description: "Delete a note. By default it is moved to the vault's .trash folder (recoverable with restore_note); " +
 			"set permanent to remove it outright.",
 	}, s.deleteNote)
@@ -136,6 +149,7 @@ func (s *Server) MCPServer() *mcp.Server {
 		Name:        "restore_note",
 		Title:       "Restore note",
 		Annotations: additiveAnn(true),
+		Icons:       icons,
 		Description: "Restore (undelete) a note from the vault's .trash folder. Restores to the note's path inside .trash " +
 			"unless to is set; use list_notes with dir \".trash\" to see what can be restored.",
 	}, s.restoreNote)
@@ -148,6 +162,7 @@ func (s *Server) MCPServer() *mcp.Server {
 		Name:        "list_tasks",
 		Title:       "List tasks",
 		Annotations: readAnn(),
+		Icons:       icons,
 		Description: "List reminders/tasks from the vault's reminders note (" + tasks.DefaultFile + " unless the server is configured otherwise). " +
 			"Returns open tasks by default, in file order, each with its id, section, due date, context and nesting (parent_id, depth). " +
 			"Use this to answer what is outstanding, what is due, or to find the id for another task tool.",
@@ -157,6 +172,7 @@ func (s *Server) MCPServer() *mcp.Server {
 		Name:        "get_task",
 		Title:       "Get task",
 		Annotations: readAnn(),
+		Icons:       icons,
 		Description: "Read one reminder/task in full by id, with its subtasks flattened in file order.",
 	}, s.getTask)
 
@@ -164,6 +180,7 @@ func (s *Server) MCPServer() *mcp.Server {
 		Name:        "create_task",
 		Title:       "Create task",
 		Annotations: additiveAnn(false),
+		Icons:       icons,
 		Description: "Add a reminder/task. context is mandatory and must explain why it exists so it is useful without this conversation: " +
 			"what was decided or observed, why the follow-up matters, and where the details live. Link related notes with related. " +
 			"Set parent_id to add a subtask; otherwise the task is filed at the end of section (default " + tasks.DefaultSection + ").",
@@ -173,6 +190,7 @@ func (s *Server) MCPServer() *mcp.Server {
 		Name:        "update_task",
 		Title:       "Update task",
 		Annotations: overwriteAnn(),
+		Icons:       icons,
 		Description: "Change a reminder/task's title, context, related notes, source or due date/time. Omitted fields are left alone; " +
 			"pass related as an empty list to clear links and clear_due to remove the due date and time.",
 	}, s.updateTask)
@@ -181,6 +199,7 @@ func (s *Server) MCPServer() *mcp.Server {
 		Name:        "complete_task",
 		Title:       "Complete task",
 		Annotations: additiveAnn(true),
+		Icons:       icons,
 		Description: "Tick a reminder/task and record its closure handoff: how it was resolved, what changed or was delivered, why, " +
 			"and any residual follow-up, with links to resulting notes or PRs. Refuses while the task still has open subtasks.",
 	}, s.completeTask)
@@ -189,6 +208,7 @@ func (s *Server) MCPServer() *mcp.Server {
 		Name:        "reopen_task",
 		Title:       "Reopen task",
 		Annotations: additiveAnn(true),
+		Icons:       icons,
 		Description: "Untick a completed reminder/task. The earlier closure note is kept for the record.",
 	}, s.reopenTask)
 
@@ -196,11 +216,30 @@ func (s *Server) MCPServer() *mcp.Server {
 		Name:        "delete_task",
 		Title:       "Delete task",
 		Annotations: overwriteAnn(),
+		Icons:       icons,
 		Description: "Remove a reminder/task and its subtasks from the reminders note. Prefer complete_task when the work was actually done.",
 	}, s.deleteTask)
 
 	return srv
 }
+
+// iconBase is the Obsidian logo mark on the lab's public icon CDN.
+const iconBase = "https://s3.donkeywork.dev/mcp-icons/obsidian"
+
+// icons identifies the server and every tool with the Obsidian logo: one
+// PNG per published resolution plus the scalable SVG. The gradient mark
+// reads on light and dark backgrounds, so no Theme is set.
+var icons = func() []mcp.Icon {
+	out := []mcp.Icon{{Source: iconBase + ".svg", MIMEType: "image/svg+xml", Sizes: []string{"any"}}}
+	for _, px := range []int{16, 32, 64, 128, 256, 512} {
+		out = append(out, mcp.Icon{
+			Source:   fmt.Sprintf("%s-%d.png", iconBase, px),
+			MIMEType: "image/png",
+			Sizes:    []string{fmt.Sprintf("%dx%d", px, px)},
+		})
+	}
+	return out
+}()
 
 // The vault is a closed domain, so every tool sets OpenWorldHint false.
 // DestructiveHint and OpenWorldHint are pointers whose spec default is true,
